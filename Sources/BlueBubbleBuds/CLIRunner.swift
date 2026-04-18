@@ -70,4 +70,15 @@ struct CLIRunner {
     static func analyze(chatId: Int) async throws -> AnalysisPayload {
         try await run(AnalysisPayload.self, arguments: ["analyze", String(chatId)])
     }
+
+    static func context(chatId: Int, rowid: Int, before: Int = 12, after: Int = 12) async throws -> ContextPayload {
+        try await run(
+            ContextPayload.self,
+            arguments: [
+                "context", String(chatId), String(rowid),
+                "--before", String(before),
+                "--after", String(after),
+            ]
+        )
+    }
 }

@@ -200,9 +200,12 @@ struct AnalysisView: View {
 
     private func topMessagesSection(_ a: AnalysisPayload) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Top 10 most-reacted-to messages").font(.title3).fontWeight(.semibold)
+            Text("Top 10 most-reacted-to messages")
+                .font(.title3).fontWeight(.semibold)
+            Text("Click a row to see surrounding conversation.")
+                .font(.caption).foregroundStyle(.secondary)
             ForEach(a.topMessages) { m in
-                TopMessageRow(message: m)
+                TopMessageRow(message: m, chatId: a.chatId)
             }
         }
     }
@@ -210,7 +213,9 @@ struct AnalysisView: View {
 
 private struct TopMessageRow: View {
     let message: TopMessage
+    let chatId: Int
     @State private var enlarged = false
+    @State private var showingContext = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -235,6 +240,15 @@ private struct TopMessageRow: View {
         }
         .padding(10)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if message.rowid != nil { showingContext = true }
+        }
+        .sheet(isPresented: $showingContext) {
+            if let rowid = message.rowid {
+                ContextView(chatId: chatId, targetRowid: rowid)
+            }
+        }
     }
 
     @ViewBuilder

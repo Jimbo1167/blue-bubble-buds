@@ -560,6 +560,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         # Local time for date display (was UTC — could be off by a day)
         dt_local = apple_ns_to_dt(r["target_date"]).astimezone()
         top_messages.append({
+            "rowid": r["target_rowid"],
             "sender": name_for(r["target_is_me"], r["target_handle_id"]),
             "date": dt_local.strftime("%Y-%m-%d"),
             "datetime": dt_local.strftime("%Y-%m-%d %H:%M"),
@@ -628,6 +629,134 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         "weekly_series": weekly_series,
         "top_messages": top_messages,
         "quiet_friends": quiet_friends,
+    }
+
+
+def collect_context(
+    conn: sqlite3.Connection,
+    chat_id: int,
+    target_rowid: int,
+    before: int = 12,
+    after: int = 12,
+) -> dict[str, Any]:
+    """Fetch messages surrounding a target message (for a contextual view).
+
+    Excludes reaction/sticker messages (types in 1000, 2000-3007) from the
+    thread view — they're counted as reaction badges on the target message
+    but aren't themselves content.
+    """
+    all_labels = all_handle_labels(conn)
+
+    def name_for(is_me: int, handle_id: int | None) -> str:
+        if is_me:
+            return "me"
+        if not handle_id:
+            return "unknown"
+        return all_labels.get(handle_id, f"handle#{handle_id}")
+
+    target = conn.execute(
+        "SELECT ROWID, guid, date FROM message WHERE ROWID = ?",
+        (target_rowid,),
+    ).fetchone()
+    if not target:
+        return {"error": f"message {target_rowid} not found"}
+
+    target_date = target["date"]
+
+    # Fetch messages before and after the target, within the chat.
+    # Exclude tapback/sticker rows (they're reactions, not content).
+    before_rows = conn.execute(
+        """
+        SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+               m.attributedBody, m.balloon_bundle_id
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE cmj.chat_id = ?
+          AND m.date < ?
+          AND m.associated_message_type = 0
+        ORDER BY m.date DESC
+        LIMIT ?
+        """,
+        (chat_id, target_date, before),
+    ).fetchall()
+    target_row = conn.execute(
+        """
+        SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+               m.attributedBody, m.balloon_bundle_id
+        FROM message m WHERE m.ROWID = ?
+        """,
+        (target_rowid,),
+    ).fetchone()
+    after_rows = conn.execute(
+        """
+        SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+               m.attributedBody, m.balloon_bundle_id
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE cmj.chat_id = ?
+          AND m.date > ?
+          AND m.associated_message_type = 0
+        ORDER BY m.date ASC
+        LIMIT ?
+        """,
+        (chat_id, target_date, after),
+    ).fetchall()
+
+    ordered = list(reversed(before_rows)) + [target_row] + list(after_rows)
+
+    def enrich(row: sqlite3.Row) -> dict[str, Any]:
+        if row is None:
+            return None
+        atts = conn.execute(
+            """
+            SELECT att.filename, att.transfer_name, att.mime_type, att.uti, att.is_sticker
+            FROM message_attachment_join maj
+            JOIN attachment att ON att.ROWID = maj.attachment_id
+            WHERE maj.message_id = ?
+            """,
+            (row["ROWID"],),
+        ).fetchall()
+        # Count reactions on this message (tapbacks + stuck stickers)
+        rxn = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM message r
+            WHERE r.associated_message_guid IN ('bp:' || ?, 'p:0/' || ?, 'p:1/' || ?, 'p:2/' || ?)
+              AND (r.associated_message_type BETWEEN 2000 AND 2007 OR r.associated_message_type = 1000)
+            """,
+            (row["guid"], row["guid"], row["guid"], row["guid"]),
+        ).fetchone()["n"]
+        dt_local = apple_ns_to_dt(row["date"]).astimezone()
+        return {
+            "rowid": row["ROWID"],
+            "guid": row["guid"],
+            "sender": name_for(row["is_from_me"], row["handle_id"]),
+            "is_from_me": bool(row["is_from_me"]),
+            "datetime": dt_local.strftime("%Y-%m-%d %H:%M"),
+            "date": dt_local.strftime("%Y-%m-%d"),
+            "is_target": row["ROWID"] == target_rowid,
+            "text": best_text(row["text"], row["attributedBody"]),
+            "balloon_bundle_id": row["balloon_bundle_id"],
+            "reaction_count": rxn,
+            "attachments": [
+                {
+                    "path": (a["filename"] or "").replace("~", str(Path.home()), 1) or None,
+                    "name": a["transfer_name"],
+                    "mime_type": a["mime_type"],
+                    "uti": a["uti"],
+                    "is_sticker": bool(a["is_sticker"]),
+                }
+                for a in atts
+            ],
+        }
+
+    messages = [enrich(r) for r in ordered if r is not None]
+
+    return {
+        "chat_id": chat_id,
+        "chat_name": chat_name(conn, chat_id),
+        "target_rowid": target_rowid,
+        "messages": messages,
     }
 
 
@@ -932,6 +1061,12 @@ def main() -> int:
     p_st = sub.add_parser("stats", help="Validation totals for a chat")
     p_st.add_argument("chat_id", type=int)
 
+    p_ctx = sub.add_parser("context", help="Messages surrounding a target message")
+    p_ctx.add_argument("chat_id", type=int)
+    p_ctx.add_argument("rowid", type=int)
+    p_ctx.add_argument("--before", type=int, default=12)
+    p_ctx.add_argument("--after", type=int, default=12)
+
     args = ap.parse_args()
     conn = load_db(args.db)
     try:
@@ -953,6 +1088,15 @@ def main() -> int:
                 print(json.dumps(data, indent=2, ensure_ascii=False))
             else:
                 render_stats_text(data)
+        elif args.cmd == "context":
+            data = collect_context(conn, args.chat_id, args.rowid, args.before, args.after)
+            if args.json:
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+            else:
+                for m in data.get("messages", []):
+                    marker = " ← TARGET" if m["is_target"] else ""
+                    text = (m["text"] or "(no text)")[:100]
+                    print(f"[{m['datetime']}] {m['sender']:<20} ({m['reaction_count']} rxn) {text}{marker}")
     finally:
         conn.close()
     return 0

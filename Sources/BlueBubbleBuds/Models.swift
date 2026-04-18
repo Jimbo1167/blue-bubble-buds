@@ -132,6 +132,7 @@ struct WeeklyRow: Decodable, Identifiable, Hashable {
 }
 
 struct TopMessage: Decodable, Identifiable, Hashable {
+    let rowid: Int?
     let sender: String
     let date: String
     let datetime: String?
@@ -144,7 +145,7 @@ struct TopMessage: Decodable, Identifiable, Hashable {
     var id: String { guid ?? "\(date)-\(sender)-\(reactionCount)" }
 
     enum CodingKeys: String, CodingKey {
-        case sender, date, datetime, guid, text, attachments
+        case rowid, sender, date, datetime, guid, text, attachments
         case reactionCount = "reaction_count"
         case balloonBundleId = "balloon_bundle_id"
         case hasGhostAttachment = "has_ghost_attachment"
@@ -168,6 +169,49 @@ struct TopMessage: Decodable, Identifiable, Hashable {
         if !attachments.isEmpty { return "Attachment" }
         if hasGhostAttachment { return "Attachment (purged)" }
         return "Text"
+    }
+
+    var firstImageURL: URL? {
+        attachments.first(where: { $0.isImageLike })?.fileURL
+    }
+}
+
+// MARK: - context payload
+
+struct ContextPayload: Decodable {
+    let chatId: Int
+    let chatName: String
+    let targetRowid: Int
+    let messages: [ContextMessage]
+
+    enum CodingKeys: String, CodingKey {
+        case chatId = "chat_id"
+        case chatName = "chat_name"
+        case targetRowid = "target_rowid"
+        case messages
+    }
+}
+
+struct ContextMessage: Decodable, Identifiable, Hashable {
+    let rowid: Int
+    let guid: String?
+    let sender: String
+    let isFromMe: Bool
+    let datetime: String
+    let date: String
+    let isTarget: Bool
+    let text: String?
+    let balloonBundleId: String?
+    let reactionCount: Int
+    let attachments: [TopMessageAttachment]
+    var id: Int { rowid }
+
+    enum CodingKeys: String, CodingKey {
+        case rowid, guid, sender, datetime, date, text, attachments
+        case isFromMe = "is_from_me"
+        case isTarget = "is_target"
+        case balloonBundleId = "balloon_bundle_id"
+        case reactionCount = "reaction_count"
     }
 
     var firstImageURL: URL? {
