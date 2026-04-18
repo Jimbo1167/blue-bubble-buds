@@ -223,43 +223,91 @@ private struct TopMessageRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Text(message.sender).fontWeight(.medium)
-                    Text(message.date).font(.caption).foregroundStyle(.secondary)
+                    Text(message.datetime ?? message.date).font(.caption).foregroundStyle(.secondary)
                     kindBadge
+                    Spacer()
+                    actionButtons
                 }
 
-                if let imgURL = message.firstImageURL {
-                    Button { enlarged.toggle() } label: {
-                        AsyncImage(url: imgURL) { phase in
-                            switch phase {
-                            case .success(let img):
-                                img.resizable().scaledToFit()
-                                    .frame(maxHeight: enlarged ? 360 : 140)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                            case .failure:
-                                fallbackLabel("Image unavailable")
-                            default:
-                                ProgressView().frame(height: 80)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                } else if message.balloonBundleId == "com.apple.messages.URLBalloonProvider" {
-                    urlCardPlaceholder
-                } else if let text = message.text, !text.isEmpty {
-                    Text(text)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(5)
-                } else if !message.attachments.isEmpty {
-                    fallbackLabel(message.attachments.first?.name ?? message.kindLabel)
-                } else {
-                    Text("(no content)").foregroundStyle(.tertiary).italic()
-                }
+                contentBody
             }
             Spacer(minLength: 0)
         }
         .padding(10)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private var contentBody: some View {
+        if let imgURL = message.firstImageURL {
+            Button { enlarged.toggle() } label: {
+                AsyncImage(url: imgURL) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFit()
+                            .frame(maxHeight: enlarged ? 360 : 140)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    case .failure:
+                        fallbackLabel("Image unavailable")
+                    default:
+                        ProgressView().frame(height: 80)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        } else if message.balloonBundleId == "com.apple.messages.URLBalloonProvider" {
+            urlCardPlaceholder
+        } else if let text = message.text, !text.isEmpty {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(5)
+                .textSelection(.enabled)
+        } else if message.hasGhostAttachment {
+            fallbackLabel("Attachment no longer cached (iCloud Photos / cleanup)")
+        } else if !message.attachments.isEmpty {
+            fallbackLabel(message.attachments.first?.name ?? message.kindLabel)
+        } else {
+            Text("(no content)").foregroundStyle(.tertiary).italic()
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 6) {
+            Button {
+                copySearchText()
+            } label: {
+                Image(systemName: "doc.on.doc").font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Copy sender + date + snippet for searching in Messages.app")
+
+            Button {
+                openMessagesApp()
+            } label: {
+                Image(systemName: "arrow.up.forward.app").font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Open Messages.app (use ⌘F to search for the copied text)")
+        }
+    }
+
+    private func copySearchText() {
+        let parts = [
+            message.sender,
+            message.datetime ?? message.date,
+            message.text ?? message.kindLabel
+        ]
+        let text = parts.joined(separator: " — ")
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
+    private func openMessagesApp() {
+        if let url = URL(string: "messages:") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private var kindBadge: some View {

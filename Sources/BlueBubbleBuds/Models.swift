@@ -134,16 +134,20 @@ struct WeeklyRow: Decodable, Identifiable, Hashable {
 struct TopMessage: Decodable, Identifiable, Hashable {
     let sender: String
     let date: String
+    let datetime: String?
+    let guid: String?
     let text: String?
     let reactionCount: Int
     let balloonBundleId: String?
+    let hasGhostAttachment: Bool
     let attachments: [TopMessageAttachment]
-    var id: String { "\(date)-\(sender)-\(reactionCount)" }
+    var id: String { guid ?? "\(date)-\(sender)-\(reactionCount)" }
 
     enum CodingKeys: String, CodingKey {
-        case sender, date, text, attachments
+        case sender, date, datetime, guid, text, attachments
         case reactionCount = "reaction_count"
         case balloonBundleId = "balloon_bundle_id"
+        case hasGhostAttachment = "has_ghost_attachment"
     }
 
     var kindLabel: String {
@@ -162,6 +166,7 @@ struct TopMessage: Decodable, Identifiable, Hashable {
         if attachments.contains(where: { $0.isImageLike }) { return "Photo" }
         if attachments.contains(where: { $0.isVideoLike }) { return "Video" }
         if !attachments.isEmpty { return "Attachment" }
+        if hasGhostAttachment { return "Attachment (purged)" }
         return "Text"
     }
 

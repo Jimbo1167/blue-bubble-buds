@@ -42,6 +42,62 @@ REACTION_GLYPHS = {
 APPLE_EPOCH_OFFSET = int(datetime(2001, 1, 1, tzinfo=timezone.utc).timestamp())
 
 
+def decode_typedstream_text(blob: bytes | None) -> str | None:
+    """Extract the primary NSString from Apple's typedstream attributedBody.
+
+    Modern iMessage stores the rendered message text as an attributed
+    string blob, not in the `text` column. The blob is a typedstream
+    (legacy NSArchiver format). We find the first NSString and its
+    length-prefixed UTF-8 payload.
+    """
+    if not blob or not blob.startswith(b"\x04\x0b"):
+        return None
+    idx = blob.find(b"NSString")
+    if idx < 0:
+        return None
+    i = idx + len(b"NSString")
+    while i < len(blob):
+        if blob[i] == 0x2B:  # '+' precedes length-prefixed content
+            mark = blob[i + 1]
+            if mark == 0x81:
+                length = int.from_bytes(blob[i + 2 : i + 4], "little")
+                start = i + 4
+            elif mark == 0x82:
+                length = int.from_bytes(blob[i + 2 : i + 6], "little")
+                start = i + 6
+            elif mark == 0x83:
+                length = int.from_bytes(blob[i + 2 : i + 10], "little")
+                start = i + 10
+            else:
+                length = mark
+                start = i + 2
+            if 0 < length <= len(blob) - start:
+                try:
+                    return blob[start : start + length].decode("utf-8")
+                except UnicodeDecodeError:
+                    return None
+            return None
+        i += 1
+    return None
+
+
+def best_text(text_col: str | None, attributed_body: bytes | None) -> str | None:
+    """Pick the most informative text for a message.
+
+    - If text column is non-empty and not just the object-replacement char,
+      use it.
+    - Otherwise try decoding attributedBody.
+    - If both produce only the placeholder, return None.
+    """
+    obj_replacement = "\ufffc"
+    if text_col and text_col.strip().replace(obj_replacement, "").strip():
+        return text_col.replace("\n", " ")
+    decoded = decode_typedstream_text(attributed_body)
+    if decoded and decoded.strip().replace(obj_replacement, "").strip():
+        return decoded.replace("\n", " ")
+    return None
+
+
 def load_db(path: Path) -> sqlite3.Connection:
     tmp = Path(tempfile.gettempdir()) / "blue_bubble_buds_chat.db"
     shutil.copy2(path, tmp)
@@ -300,7 +356,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         )
         SELECT
             target.ROWID AS target_rowid,
+            target.guid AS target_guid,
             target.text AS target_text,
+            target.attributedBody AS target_attributed,
             target.date AS target_date,
             target.handle_id AS target_handle_id,
             target.is_from_me AS target_is_me,
@@ -499,12 +557,17 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             "SELECT balloon_bundle_id FROM message WHERE ROWID = ?",
             (r["target_rowid"],),
         ).fetchone()
+        # Local time for date display (was UTC — could be off by a day)
+        dt_local = apple_ns_to_dt(r["target_date"]).astimezone()
         top_messages.append({
             "sender": name_for(r["target_is_me"], r["target_handle_id"]),
-            "date": apple_ns_to_dt(r["target_date"]).strftime("%Y-%m-%d"),
-            "text": (r["target_text"] or "").replace("\n", " ") or None,
+            "date": dt_local.strftime("%Y-%m-%d"),
+            "datetime": dt_local.strftime("%Y-%m-%d %H:%M"),
+            "guid": r["target_guid"],
+            "text": best_text(r["target_text"], r["target_attributed"]),
             "reaction_count": r["n"],
             "balloon_bundle_id": parent["balloon_bundle_id"] if parent else None,
+            "has_ghost_attachment": (r["target_text"] or "").strip() == "\ufffc" and not attachments,
             "attachments": [
                 {
                     "path": (a["filename"] or "").replace("~", str(Path.home()), 1) or None,
