@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Blue Bubble Buds"
-BUNDLE_ID="family.schindler.bluebubblebuds"
+BUNDLE_ID="com.github.jimbo1167.bluebubblebuds"
 APP_DIR="$ROOT/dist/${APP_NAME}.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
