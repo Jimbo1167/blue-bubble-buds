@@ -244,8 +244,10 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         {"chat_id": chat_id},
     ).fetchall()
 
-    # Stickers on visual media: images, videos, or anything with an
-    # image/video file extension (catches attachments with NULL mime_type).
+    # Stickers on visual media: includes image/video attachments AND
+    # URL preview cards (Reddit, Twitter, YouTube, news previews) AND
+    # GIFs sent via the #images extension. All three render as
+    # image-like content in Messages.app.
     img_sticker_rows = conn.execute(
         ACTIVE_REACTIONS_CTE
         + """
@@ -255,20 +257,32 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             COUNT(DISTINCT a.ROWID) AS n
         FROM active a
         JOIN message target ON target.guid = a.target_guid
-        JOIN message_attachment_join maj ON maj.message_id = target.ROWID
-        JOIN attachment att ON att.ROWID = maj.attachment_id
         WHERE a.associated_message_type = 2007
           AND (
-            att.mime_type LIKE 'image/%'
-            OR att.mime_type LIKE 'video/%'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.heic'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.heif'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.jpg'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.jpeg'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.png'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.gif'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.mov'
-            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.mp4'
+            -- URL preview cards (Reddit/Twitter/YouTube/news/etc.)
+            target.balloon_bundle_id = 'com.apple.messages.URLBalloonProvider'
+            -- GIF-picker extension
+            OR target.balloon_bundle_id LIKE '%#images%'
+            -- Any image/video attachment, including NULL-mime attachments caught by extension
+            OR EXISTS (
+                SELECT 1
+                FROM message_attachment_join maj
+                JOIN attachment att ON att.ROWID = maj.attachment_id
+                WHERE maj.message_id = target.ROWID
+                  AND (
+                    att.mime_type LIKE 'image/%'
+                    OR att.mime_type LIKE 'video/%'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.heic'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.heif'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.jpg'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.jpeg'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.png'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.gif'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.webp'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.mov'
+                    OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.mp4'
+                  )
+            )
           )
         GROUP BY a.is_from_me, a.handle_id
         ORDER BY n DESC
