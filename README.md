@@ -116,6 +116,10 @@ iconutil -c icns Resources/AppIcon.iconset
 
 End users never need Pillow — the `.icns` is checked in.
 
+## Support
+
+If Blue Bubble Buds helps you check in on a friend, consider [buying me a coffee](https://buymeacoffee.com/jimbo1167) ☕
+
 ## License
 
 [MIT](LICENSE) © James Schindler
