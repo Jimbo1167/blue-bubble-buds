@@ -118,32 +118,7 @@ struct AnalysisView: View {
     }
 
     private func typeBreakdownSection(_ a: AnalysisPayload) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("By reaction type").font(.title3).fontWeight(.semibold)
-            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 4) {
-                GridRow {
-                    Text("Person").gridColumnAlignment(.leading)
-                    Text("❤️"); Text("👍"); Text("👎"); Text("😂")
-                    Text("‼️"); Text("❓"); Text("✨"); Text("👆"); Text("📌"); Text("Total")
-                }
-                .font(.caption).foregroundStyle(.secondary)
-                ForEach(a.byType) { r in
-                    GridRow {
-                        Text(r.person).gridColumnAlignment(.leading)
-                        Text("\(r.love)").monospacedDigit()
-                        Text("\(r.like)").monospacedDigit()
-                        Text("\(r.dislike)").monospacedDigit()
-                        Text("\(r.laugh)").monospacedDigit()
-                        Text("\(r.emphasize)").monospacedDigit()
-                        Text("\(r.question)").monospacedDigit()
-                        Text("\(r.emoji)").monospacedDigit()
-                        Text("\(r.tapbackSticker)").monospacedDigit()
-                        Text("\(r.stuckSticker)").monospacedDigit()
-                        Text("\(r.total)").fontWeight(.medium).monospacedDigit()
-                    }
-                }
-            }
-        }
+        SortableByTypeTable(rows: a.byType)
     }
 
     private func rateSection(_ a: AnalysisPayload) -> some View {
@@ -208,6 +183,146 @@ struct AnalysisView: View {
                 TopMessageRow(message: m, chatId: a.chatId)
             }
         }
+    }
+}
+
+private struct SortableByTypeTable: View {
+    let rows: [ByTypeRow]
+
+    enum SortKey: String, CaseIterable {
+        case person, love, like, dislike, laugh, emphasize, question, emoji, tapback, stuck, total
+
+        var label: String {
+            switch self {
+            case .person:    return "Person"
+            case .love:      return "❤️"
+            case .like:      return "👍"
+            case .dislike:   return "👎"
+            case .laugh:     return "😂"
+            case .emphasize: return "‼️"
+            case .question:  return "❓"
+            case .emoji:     return "✨"
+            case .tapback:   return "👆"
+            case .stuck:     return "📌"
+            case .total:     return "Total"
+            }
+        }
+
+        var help: String {
+            switch self {
+            case .person:    return "Sort by name"
+            case .love:      return "Sort by love reactions"
+            case .like:      return "Sort by like reactions"
+            case .dislike:   return "Sort by dislike reactions"
+            case .laugh:     return "Sort by laugh reactions"
+            case .emphasize: return "Sort by emphasize reactions"
+            case .question:  return "Sort by question reactions"
+            case .emoji:     return "Sort by custom-emoji reactions"
+            case .tapback:   return "Sort by tapback stickers"
+            case .stuck:     return "Sort by stuck stickers"
+            case .total:     return "Sort by total"
+            }
+        }
+    }
+
+    @State private var sortKey: SortKey = .total
+    @State private var ascending: Bool = false
+
+    private func valueForSort(_ row: ByTypeRow, _ key: SortKey) -> Int {
+        switch key {
+        case .person:    return 0  // handled separately
+        case .love:      return row.love
+        case .like:      return row.like
+        case .dislike:   return row.dislike
+        case .laugh:     return row.laugh
+        case .emphasize: return row.emphasize
+        case .question:  return row.question
+        case .emoji:     return row.emoji
+        case .tapback:   return row.tapbackSticker
+        case .stuck:     return row.stuckSticker
+        case .total:     return row.total
+        }
+    }
+
+    private var sorted: [ByTypeRow] {
+        if sortKey == .person {
+            return rows.sorted { ascending ? $0.person < $1.person : $0.person > $1.person }
+        }
+        return rows.sorted {
+            let a = valueForSort($0, sortKey)
+            let b = valueForSort($1, sortKey)
+            return ascending ? a < b : a > b
+        }
+    }
+
+    private func headerCell(for key: SortKey) -> some View {
+        let active = sortKey == key
+        return Button {
+            if sortKey == key {
+                ascending.toggle()
+            } else {
+                sortKey = key
+                ascending = false  // numeric columns default descending
+                if key == .person { ascending = true }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Text(key.label)
+                if active {
+                    Image(systemName: ascending ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(active ? Color.accentColor : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help(key.help)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("By reaction type").font(.title3).fontWeight(.semibold)
+            Text("Click a column header to sort.")
+                .font(.caption).foregroundStyle(.secondary)
+            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 4) {
+                GridRow {
+                    headerCell(for: .person).gridColumnAlignment(.leading)
+                    headerCell(for: .love)
+                    headerCell(for: .like)
+                    headerCell(for: .dislike)
+                    headerCell(for: .laugh)
+                    headerCell(for: .emphasize)
+                    headerCell(for: .question)
+                    headerCell(for: .emoji)
+                    headerCell(for: .tapback)
+                    headerCell(for: .stuck)
+                    headerCell(for: .total)
+                }
+                ForEach(sorted) { r in
+                    GridRow {
+                        Text(r.person).gridColumnAlignment(.leading)
+                        cell(r.love,      highlighted: sortKey == .love)
+                        cell(r.like,      highlighted: sortKey == .like)
+                        cell(r.dislike,   highlighted: sortKey == .dislike)
+                        cell(r.laugh,     highlighted: sortKey == .laugh)
+                        cell(r.emphasize, highlighted: sortKey == .emphasize)
+                        cell(r.question,  highlighted: sortKey == .question)
+                        cell(r.emoji,     highlighted: sortKey == .emoji)
+                        cell(r.tapbackSticker, highlighted: sortKey == .tapback)
+                        cell(r.stuckSticker,   highlighted: sortKey == .stuck)
+                        cell(r.total,     highlighted: sortKey == .total, bold: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private func cell(_ n: Int, highlighted: Bool, bold: Bool = false) -> some View {
+        Text("\(n)")
+            .monospacedDigit()
+            .fontWeight(bold ? .medium : .regular)
+            .foregroundStyle(highlighted ? Color.accentColor : .primary)
     }
 }
 
