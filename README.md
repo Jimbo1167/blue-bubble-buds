@@ -61,6 +61,40 @@ python3 cli/blue_bubble_buds.py analyze <chat_id>
 python3 cli/blue_bubble_buds.py stats <chat_id>
 ```
 
+## Naming people (`names.json`)
+
+The analysis output is much friendlier when handles like `+15551234567` or
+`alice@example.com` are rendered as real names. `cli/build_names.py` builds
+this mapping automatically:
+
+```sh
+python3 cli/build_names.py
+```
+
+It reads your macOS AddressBook (read-only, via a temp copy) and matches
+every handle that appears in your `chat.db` to the corresponding contact.
+The result lands in `cli/names.json` (gitignored).
+
+**Filling in the blanks.** The script prints how many handles had no contact
+match — usually people you messaged but never saved to Contacts. To name
+them, open `cli/names.json` and add entries manually. The file is just a
+flat JSON map:
+
+```json
+{
+  "+15551234567": "Alice",
+  "bob@example.com": "Bob",
+  "+15557654321": "Mom"
+}
+```
+
+Phone numbers must be in E.164 form (`+<country><number>`, no spaces or
+dashes); emails must be lowercase. Save and rerun the analysis — the app
+reloads `names.json` on every run.
+
+Handles with no mapping fall back to the raw phone number or email, and
+any message from the person whose Mac this is running on is labeled "me".
+
 ## Full Disk Access
 
 macOS protects `~/Library/Messages/chat.db` behind Full Disk Access (FDA). You need to grant it once to whatever binary is reading the database:
