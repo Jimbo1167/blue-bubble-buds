@@ -19,5 +19,4 @@ cli/names.json
 
 # Build artifacts
 dist/
-*.app
 *.dmg

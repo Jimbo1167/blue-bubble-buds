@@ -32,17 +32,25 @@ Phase B will rewrite the CLI in Swift and bundle it inside the signed `.app` to 
 
 ## Quick Start
 
-```sh
-# 1. Generate names.json from your macOS Contacts (optional but recommended)
-python3 cli/build_names.py
+**Option A — Install as a double-clickable macOS app (recommended):**
 
-# 2. Explore in the CLI
+```sh
+python3 cli/build_names.py          # generate names.json (optional)
+bash scripts/build-app.sh --install # builds release + installs to /Applications
+```
+
+After install, launch from Spotlight (⌘Space → "Blue Bubble Buds"), Launchpad, or `/Applications`. Drag it to your Dock if you want one-click access.
+
+First launch: macOS Gatekeeper may warn — right-click the app → **Open** → confirm. After that, normal double-clicks work.
+
+**Option B — Run from source (dev mode):**
+
+```sh
+python3 cli/build_names.py
+swift run                           # launches the app
 python3 cli/blue_bubble_buds.py list-chats
 python3 cli/blue_bubble_buds.py analyze <chat_id>
 python3 cli/blue_bubble_buds.py stats <chat_id>
-
-# 3. Launch the SwiftUI app
-swift run
 ```
 
 ## CLI

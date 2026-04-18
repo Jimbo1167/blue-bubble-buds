@@ -18,11 +18,36 @@ enum CLIError: Error, LocalizedError {
 }
 
 struct CLIRunner {
-    /// Resolve the path to the bundled CLI. For `swift run` from the package root,
-    /// cwd is the package root, so `cli/blue_bubble_buds.py` works.
+    /// Resolve the path to the bundled CLI.
+    /// - Inside a .app bundle: `Contents/Resources/cli/blue_bubble_buds.py`
+    /// - Running via `swift run`: `<pkg-root>/cli/blue_bubble_buds.py`
+    /// - Fallback: search parents of the executable for a `cli/` folder.
     static var cliURL: URL {
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        return cwd.appendingPathComponent("cli/blue_bubble_buds.py")
+        let fm = FileManager.default
+
+        // 1. Bundle Resources (inside a .app)
+        if let resource = Bundle.main.url(forResource: "blue_bubble_buds", withExtension: "py", subdirectory: "cli"),
+           fm.fileExists(atPath: resource.path) {
+            return resource
+        }
+
+        // 2. cwd-relative (swift run from package root)
+        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
+        let cwdRelative = cwd.appendingPathComponent("cli/blue_bubble_buds.py")
+        if fm.fileExists(atPath: cwdRelative.path) {
+            return cwdRelative
+        }
+
+        // 3. Walk up from the executable looking for cli/ sibling
+        var dir = Bundle.main.bundleURL.deletingLastPathComponent()
+        for _ in 0..<6 {
+            let candidate = dir.appendingPathComponent("cli/blue_bubble_buds.py")
+            if fm.fileExists(atPath: candidate.path) { return candidate }
+            dir = dir.deletingLastPathComponent()
+        }
+
+        // 4. Return the cwd-relative path anyway so the error message is useful.
+        return cwdRelative
     }
 
     static func run<T: Decodable>(_ type: T.Type, arguments: [String]) async throws -> T {
