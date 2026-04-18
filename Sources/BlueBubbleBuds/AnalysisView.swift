@@ -199,27 +199,95 @@ struct AnalysisView: View {
     }
 
     private func topMessagesSection(_ a: AnalysisPayload) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Top 10 most-reacted-to messages").font(.title3).fontWeight(.semibold)
             ForEach(a.topMessages) { m in
-                HStack(alignment: .top, spacing: 10) {
-                    Text("\(m.reactionCount)")
-                        .fontWeight(.bold)
-                        .frame(width: 32, alignment: .trailing)
-                        .monospacedDigit()
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(m.sender).fontWeight(.medium)
-                            Text(m.date).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Text(m.text ?? "(attachment/empty)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                    }
-                }
-                .padding(.vertical, 2)
+                TopMessageRow(message: m)
             }
         }
     }
+}
+
+private struct TopMessageRow: View {
+    let message: TopMessage
+    @State private var enlarged = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(message.reactionCount)")
+                .font(.title3).fontWeight(.bold)
+                .frame(width: 36, alignment: .trailing)
+                .monospacedDigit()
+                .foregroundStyle(.tint)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(message.sender).fontWeight(.medium)
+                    Text(message.date).font(.caption).foregroundStyle(.secondary)
+                    kindBadge
+                }
+
+                if let imgURL = message.firstImageURL {
+                    Button { enlarged.toggle() } label: {
+                        AsyncImage(url: imgURL) { phase in
+                            switch phase {
+                            case .success(let img):
+                                img.resizable().scaledToFit()
+                                    .frame(maxHeight: enlarged ? 360 : 140)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            case .failure:
+                                fallbackLabel("Image unavailable")
+                            default:
+                                ProgressView().frame(height: 80)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                } else if message.balloonBundleId == "com.apple.messages.URLBalloonProvider" {
+                    urlCardPlaceholder
+                } else if let text = message.text, !text.isEmpty {
+                    Text(text)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(5)
+                } else if !message.attachments.isEmpty {
+                    fallbackLabel(message.attachments.first?.name ?? message.kindLabel)
+                } else {
+                    Text("(no content)").foregroundStyle(.tertiary).italic()
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var kindBadge: some View {
+        Text(message.kindLabel)
+            .font(.caption2).fontWeight(.medium)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.tint.opacity(0.2), in: Capsule())
+            .foregroundStyle(.tint)
+    }
+
+    private var urlCardPlaceholder: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "link.circle.fill").foregroundStyle(.tint)
+            Text("URL preview card (open chat in Messages.app to view)").font(.callout)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func fallbackLabel(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperclip").foregroundStyle(.secondary)
+            Text(text).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+private extension Color {
+    static let tint = Color.accentColor
 }

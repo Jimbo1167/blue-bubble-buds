@@ -136,11 +136,68 @@ struct TopMessage: Decodable, Identifiable, Hashable {
     let date: String
     let text: String?
     let reactionCount: Int
+    let balloonBundleId: String?
+    let attachments: [TopMessageAttachment]
     var id: String { "\(date)-\(sender)-\(reactionCount)" }
 
     enum CodingKeys: String, CodingKey {
-        case sender, date, text
+        case sender, date, text, attachments
         case reactionCount = "reaction_count"
+        case balloonBundleId = "balloon_bundle_id"
+    }
+
+    var kindLabel: String {
+        if let b = balloonBundleId {
+            if b == "com.apple.messages.URLBalloonProvider" { return "URL preview card" }
+            if b.contains(".Polls") { return "Poll" }
+            if b.contains("PeerPaymentMessages") { return "Apple Cash" }
+            if b.contains("DigitalTouch") { return "Digital Touch" }
+            if b.contains("Handwriting") { return "Handwritten note" }
+            if b.contains("ActivityMessagesApp") { return "Fitness activity" }
+            if b.contains("FindMy") { return "Find My" }
+            if b.contains("gamepigeon") { return "GamePigeon" }
+            if b.contains("SafetyMonitor") { return "Check In" }
+            return "Extension message"
+        }
+        if attachments.contains(where: { $0.isImageLike }) { return "Photo" }
+        if attachments.contains(where: { $0.isVideoLike }) { return "Video" }
+        if !attachments.isEmpty { return "Attachment" }
+        return "Text"
+    }
+
+    var firstImageURL: URL? {
+        attachments.first(where: { $0.isImageLike })?.fileURL
+    }
+}
+
+struct TopMessageAttachment: Decodable, Hashable {
+    let path: String?
+    let name: String?
+    let mimeType: String?
+    let uti: String?
+    let isSticker: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path, name, uti
+        case mimeType = "mime_type"
+        case isSticker = "is_sticker"
+    }
+
+    var fileURL: URL? {
+        guard let p = path else { return nil }
+        return URL(fileURLWithPath: p)
+    }
+
+    var isImageLike: Bool {
+        if let m = mimeType, m.hasPrefix("image/") { return true }
+        let lower = (name ?? path ?? "").lowercased()
+        return ["jpg", "jpeg", "png", "heic", "heif", "gif", "webp"].contains { lower.hasSuffix($0) }
+    }
+
+    var isVideoLike: Bool {
+        if let m = mimeType, m.hasPrefix("video/") { return true }
+        let lower = (name ?? path ?? "").lowercased()
+        return ["mov", "mp4", "m4v"].contains { lower.hasSuffix($0) }
     }
 }
 

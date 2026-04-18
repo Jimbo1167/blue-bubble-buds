@@ -483,15 +483,39 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         ],
     }
 
-    top_messages = [
-        {
+    top_messages = []
+    for r in top_rows:
+        attachments = conn.execute(
+            """
+            SELECT att.filename, att.transfer_name, att.mime_type, att.uti,
+                   att.is_sticker
+            FROM message_attachment_join maj
+            JOIN attachment att ON att.ROWID = maj.attachment_id
+            WHERE maj.message_id = ?
+            """,
+            (r["target_rowid"],),
+        ).fetchall()
+        parent = conn.execute(
+            "SELECT balloon_bundle_id FROM message WHERE ROWID = ?",
+            (r["target_rowid"],),
+        ).fetchone()
+        top_messages.append({
             "sender": name_for(r["target_is_me"], r["target_handle_id"]),
             "date": apple_ns_to_dt(r["target_date"]).strftime("%Y-%m-%d"),
             "text": (r["target_text"] or "").replace("\n", " ") or None,
             "reaction_count": r["n"],
-        }
-        for r in top_rows
-    ]
+            "balloon_bundle_id": parent["balloon_bundle_id"] if parent else None,
+            "attachments": [
+                {
+                    "path": (a["filename"] or "").replace("~", str(Path.home()), 1) or None,
+                    "name": a["transfer_name"],
+                    "mime_type": a["mime_type"],
+                    "uti": a["uti"],
+                    "is_sticker": bool(a["is_sticker"]),
+                }
+                for a in attachments
+            ],
+        })
 
     now = datetime.now(timezone.utc)
     recent_cutoff = now - timedelta(weeks=4)
