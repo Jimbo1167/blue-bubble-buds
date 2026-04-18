@@ -36,6 +36,7 @@ struct AnalysisPayload: Decodable {
     let reactionsGiven: [PersonCount]
     let reactionsReceived: [PersonCount]
     let byType: [ByTypeRow]
+    let receivedByType: [ByTypeRow]
     let stickerLeaderboard: [PersonCount]
     let stuckStickerLeaderboard: [PersonCount]
     let tapbackStickerLeaderboard: [PersonCount]
@@ -55,6 +56,7 @@ struct AnalysisPayload: Decodable {
         case reactionsGiven = "reactions_given"
         case reactionsReceived = "reactions_received"
         case byType = "by_type"
+        case receivedByType = "received_by_type"
         case stickerLeaderboard = "sticker_leaderboard"
         case stuckStickerLeaderboard = "stuck_sticker_leaderboard"
         case tapbackStickerLeaderboard = "tapback_sticker_leaderboard"

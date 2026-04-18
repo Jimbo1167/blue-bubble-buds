@@ -310,6 +310,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     given: dict[tuple[int, int], int] = defaultdict(int)
     received: dict[tuple[int, int], int] = defaultdict(int)
     by_type: dict[tuple[int, int], dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    received_by_type: dict[tuple[int, int], dict[int, int]] = defaultdict(lambda: defaultdict(int))
     pairwise: dict[tuple[int, int], dict[tuple[int, int], int]] = defaultdict(lambda: defaultdict(int))
     weekly: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     stuck_count: dict[tuple[int, int], int] = defaultdict(int)
@@ -322,6 +323,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         given[reactor] += 1
         received[target] += 1
         by_type[reactor][r["rtype"]] += 1
+        received_by_type[target][r["rtype"]] += 1
         pairwise[reactor][target] += 1
         weekly[reactor][apple_ns_to_dt(r["rdate"]).strftime("%Y-W%V")] += 1
         if r["rtype"] == 1000:
@@ -493,6 +495,14 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         row["total"] = sum(by_type[person].values())
         by_type_out.append(row)
 
+    received_by_type_out = []
+    for person, _ in sorted(received.items(), key=lambda x: -x[1]):
+        row = {"person": name_for(*person)}
+        for tcode, label in REACTION_LABELS.items():
+            row[label] = received_by_type[person].get(tcode, 0)
+        row["total"] = sum(received_by_type[person].values())
+        received_by_type_out.append(row)
+
     sticker_leaderboard = rank({
         p: by_type[p].get(2007, 0) + by_type[p].get(1000, 0) for p in by_type
     })
@@ -618,6 +628,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         "reactions_given": reactions_given,
         "reactions_received": reactions_received,
         "by_type": by_type_out,
+        "received_by_type": received_by_type_out,
         "sticker_leaderboard": sticker_leaderboard,
         "stuck_sticker_leaderboard": stuck_sticker_leaderboard,
         "tapback_sticker_leaderboard": tapback_sticker_leaderboard,

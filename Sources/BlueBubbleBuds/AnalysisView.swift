@@ -118,7 +118,18 @@ struct AnalysisView: View {
     }
 
     private func typeBreakdownSection(_ a: AnalysisPayload) -> some View {
-        SortableByTypeTable(rows: a.byType)
+        VStack(alignment: .leading, spacing: 18) {
+            SortableByTypeTable(
+                title: "Reactions GIVEN by reaction type",
+                subtitle: "Who gives each reaction — click a column to sort.",
+                rows: a.byType
+            )
+            SortableByTypeTable(
+                title: "Reactions RECEIVED by reaction type",
+                subtitle: "Who gets each reaction on their messages — click 😂 to find the chat's funniest person.",
+                rows: a.receivedByType
+            )
+        }
     }
 
     private func rateSection(_ a: AnalysisPayload) -> some View {
@@ -187,6 +198,8 @@ struct AnalysisView: View {
 }
 
 private struct SortableByTypeTable: View {
+    let title: String
+    let subtitle: String
     let rows: [ByTypeRow]
 
     enum SortKey: String, CaseIterable {
@@ -282,8 +295,8 @@ private struct SortableByTypeTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("By reaction type").font(.title3).fontWeight(.semibold)
-            Text("Click a column header to sort.")
+            Text(title).font(.title3).fontWeight(.semibold)
+            Text(subtitle)
                 .font(.caption).foregroundStyle(.secondary)
             Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
