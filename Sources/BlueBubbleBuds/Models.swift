@@ -38,7 +38,7 @@ struct AnalysisPayload: Decodable {
     let byType: [ByTypeRow]
     let stickerLeaderboard: [PersonCount]
     let emojiLeaderboard: [PersonCount]
-    let stickersOnImages: [PersonCount]
+    let stickersOnVisualMedia: [PersonCount]
     let reactionRate: [RateRow]
     let pairwise: [PairRow]
     let weeklySeries: WeeklySeries
@@ -54,7 +54,7 @@ struct AnalysisPayload: Decodable {
         case byType = "by_type"
         case stickerLeaderboard = "sticker_leaderboard"
         case emojiLeaderboard = "emoji_leaderboard"
-        case stickersOnImages = "stickers_on_images"
+        case stickersOnVisualMedia = "stickers_on_visual_media"
         case reactionRate = "reaction_rate"
         case pairwise
         case weeklySeries = "weekly_series"

@@ -29,7 +29,7 @@ struct AnalysisView: View {
                         typeBreakdownSection(a)
                         leaderboardSection("🧩 Sticker champs", rows: a.stickerLeaderboard)
                         leaderboardSection("✨ Custom-emoji champs", rows: a.emojiLeaderboard)
-                        leaderboardSection("📷🧩 Stickers on images", rows: a.stickersOnImages)
+                        leaderboardSection("📷🧩 Stickers on photos/videos", rows: a.stickersOnVisualMedia)
                         rateSection(a)
                         pairwiseSection(a)
                         weeklySection(a)

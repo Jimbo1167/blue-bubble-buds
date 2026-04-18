@@ -244,6 +244,8 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         {"chat_id": chat_id},
     ).fetchall()
 
+    # Stickers on visual media: images, videos, or anything with an
+    # image/video file extension (catches attachments with NULL mime_type).
     img_sticker_rows = conn.execute(
         ACTIVE_REACTIONS_CTE
         + """
@@ -256,7 +258,18 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         JOIN message_attachment_join maj ON maj.message_id = target.ROWID
         JOIN attachment att ON att.ROWID = maj.attachment_id
         WHERE a.associated_message_type = 2007
-          AND att.mime_type LIKE 'image/%'
+          AND (
+            att.mime_type LIKE 'image/%'
+            OR att.mime_type LIKE 'video/%'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.heic'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.heif'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.jpg'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.jpeg'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.png'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.gif'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.mov'
+            OR lower(COALESCE(att.filename, att.transfer_name, '')) GLOB '*.mp4'
+          )
         GROUP BY a.is_from_me, a.handle_id
         ORDER BY n DESC
         """,
@@ -413,7 +426,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         "by_type": by_type_out,
         "sticker_leaderboard": sticker_leaderboard,
         "emoji_leaderboard": emoji_leaderboard,
-        "stickers_on_images": stickers_on_images,
+        "stickers_on_visual_media": stickers_on_images,
         "reaction_rate": reaction_rate,
         "pairwise": pair_out[:50],
         "weekly_series": weekly_series,
@@ -613,12 +626,12 @@ def render_analysis_text(d: dict) -> None:
     else:
         print("  No custom-emoji reactions in this chat.")
 
-    section("3d. Stickers-on-IMAGES leaderboard")
-    if d["stickers_on_images"]:
-        for r in d["stickers_on_images"]:
+    section("3d. Stickers on visual media (photos + videos, by extension)")
+    if d["stickers_on_visual_media"]:
+        for r in d["stickers_on_visual_media"]:
             print(f"  {r['person']:<25} {r['count']:>5}")
     else:
-        print("  No sticker reactions on image messages in this chat.")
+        print("  No sticker reactions on visual media in this chat.")
 
     section("4. Reaction rate (reactions per 100 eligible messages)")
     for r in d["reaction_rate"]:
