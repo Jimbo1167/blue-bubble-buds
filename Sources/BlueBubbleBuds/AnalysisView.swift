@@ -503,10 +503,14 @@ private struct StickerSheet: View {
     }
 
     private var summaryLine: String {
-        let total = "\(totalCount) total \(label.lowercased()) \(direction)"
-        if stickers.isEmpty { return total }
-        let cover = "Top \(stickers.count) = \(topCoverage) of \(totalCount) (\(Int(Double(topCoverage) / Double(max(totalCount, 1)) * 100))% of the total)"
-        return "\(total)   ·   \(cover)"
+        if loading { return "\(totalCount) total uses — loading…" }
+        if stickers.isEmpty { return "\(totalCount) total · no cached sticker images available" }
+        let purged = totalCount - topCoverage
+        let cover = "\(topCoverage) of \(totalCount) uses have cached images (\(stickers.count) unique stickers shown)"
+        if purged > 0 {
+            return "\(cover) · \(purged) more uses had images that were purged from the local cache and can't be displayed"
+        }
+        return cover
     }
 
     private var gridColumns: [GridItem] {

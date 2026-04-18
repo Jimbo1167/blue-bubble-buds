@@ -690,7 +690,10 @@ def collect_top_stickers(
             FROM active a
             JOIN message target ON target.guid = a.target_guid
             JOIN message_attachment_join maj ON maj.message_id = a.ROWID
-            JOIN attachment att ON att.ROWID = maj.attachment_id AND att.is_sticker = 1
+            -- No is_sticker filter: tapback (2007) and stuck-sticker (1000)
+            -- rows ARE sticker messages by definition. The is_sticker attachment
+            -- flag is unreliable — often 0 or NULL for legitimate stickers.
+            JOIN attachment att ON att.ROWID = maj.attachment_id
             WHERE a.associated_message_type = 2007
         """
         if direction == "given":
@@ -713,7 +716,10 @@ def collect_top_stickers(
                      ELSE m.associated_message_guid END
             )
             JOIN message_attachment_join maj ON maj.message_id = m.ROWID
-            JOIN attachment att ON att.ROWID = maj.attachment_id AND att.is_sticker = 1
+            -- No is_sticker filter: tapback (2007) and stuck-sticker (1000)
+            -- rows ARE sticker messages by definition. The is_sticker attachment
+            -- flag is unreliable — often 0 or NULL for legitimate stickers.
+            JOIN attachment att ON att.ROWID = maj.attachment_id
             WHERE cmj.chat_id = :chat_id
               AND m.associated_message_type = 1000
         """
