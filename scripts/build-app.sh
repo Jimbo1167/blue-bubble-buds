@@ -62,8 +62,29 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Ad-hoc signing (Gatekeeper will still warn on first open; right-click → Open to bypass)"
-codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || true
+echo "==> Code signing"
+# Prefer any stable keychain identity (Apple Development, Mac Developer, or our
+# self-signed 'Blue Bubble Buds Dev'). This keeps the Designated Requirement
+# constant across rebuilds so Full Disk Access doesn't reset.
+SIGNING_IDENTITY=""
+IDENTITIES=$(security find-identity -v -p codesigning || true)
+for candidate in "Blue Bubble Buds Dev" "Apple Development" "Mac Developer" "Developer ID Application"; do
+    match=$(printf '%s\n' "$IDENTITIES" | grep "\"$candidate" || true)
+    if [[ -n "$match" ]]; then
+        SIGNING_IDENTITY=$(printf '%s\n' "$match" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+        break
+    fi
+done
+
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+    echo "    using stable identity: $SIGNING_IDENTITY"
+    echo "    (FDA grant persists across rebuilds)"
+    codesign --force --deep --sign "$SIGNING_IDENTITY" "$APP_DIR"
+else
+    echo "    using ad-hoc signature — FDA grant resets on every rebuild"
+    echo "    one-time fix: bash scripts/setup-signing.sh"
+    codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || true
+fi
 
 if [[ "${1:-}" == "--install" ]]; then
     echo "==> Installing to /Applications"
