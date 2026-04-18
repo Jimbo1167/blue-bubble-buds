@@ -270,7 +270,12 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
              FROM message_attachment_join maj
              JOIN attachment att ON att.ROWID = maj.attachment_id
              WHERE maj.message_id = a.ROWID AND att.is_sticker = 1
-             LIMIT 1) AS sticker_uti
+             LIMIT 1) AS sticker_uti,
+            (SELECT att.filename
+             FROM message_attachment_join maj
+             JOIN attachment att ON att.ROWID = maj.attachment_id
+             WHERE maj.message_id = a.ROWID AND att.is_sticker = 1
+             LIMIT 1) AS sticker_path
         FROM active a
         JOIN message target ON target.guid = a.target_guid
         """,
@@ -290,7 +295,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             target.is_from_me AS target_is_me,
             target.text AS target_text,
             target.date AS target_date,
-            att.uti AS sticker_uti
+            NULL AS emoji_char,
+            att.uti AS sticker_uti,
+            att.filename AS sticker_path
         FROM message stuck
         JOIN chat_message_join cmj ON cmj.message_id = stuck.ROWID
         JOIN message target ON target.guid = (
@@ -322,6 +329,11 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     # Custom-emoji tallies per person (given and received)
     emoji_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     emoji_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    # Per-person sticker path tallies (separate for tapback 2007 vs stuck 1000)
+    tapback_stickers_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    stuck_stickers_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    tapback_stickers_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    stuck_stickers_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for r in reactions:
         reactor = person_key(r["reactor_is_me"], r["reactor_handle_id"])
@@ -343,6 +355,15 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         if r["rtype"] == 2006 and r["emoji_char"]:
             emoji_given[reactor][r["emoji_char"]] += 1
             emoji_received[target][r["emoji_char"]] += 1
+        # Track specific sticker paths
+        spath = r["sticker_path"]
+        if spath:
+            if r["rtype"] == 2007:
+                tapback_stickers_given[reactor][spath] += 1
+                tapback_stickers_received[target][spath] += 1
+            elif r["rtype"] == 1000:
+                stuck_stickers_given[reactor][spath] += 1
+                stuck_stickers_received[target][spath] += 1
 
     # Top-reacted messages counts both active tapbacks AND stuck stickers.
     top_rows = conn.execute(
@@ -503,6 +524,13 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             for e, c in sorted(counts.items(), key=lambda x: -x[1])[:n]
         ]
 
+    def top_stickers(counts: dict[str, int], n: int = 5) -> list[dict]:
+        return [
+            {"path": (p or "").replace("~", str(Path.home()), 1), "count": c}
+            for p, c in sorted(counts.items(), key=lambda x: -x[1])[:n]
+            if p
+        ]
+
     by_type_out = []
     for person, _ in sorted(given.items(), key=lambda x: -x[1]):
         row = {"person": name_for(*person)}
@@ -510,6 +538,8 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             row[label] = by_type[person].get(tcode, 0)
         row["total"] = sum(by_type[person].values())
         row["top_custom_emojis"] = top_emojis(emoji_given[person])
+        row["top_tapback_stickers"] = top_stickers(tapback_stickers_given[person])
+        row["top_stuck_stickers"] = top_stickers(stuck_stickers_given[person])
         by_type_out.append(row)
 
     received_by_type_out = []
@@ -519,6 +549,8 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             row[label] = received_by_type[person].get(tcode, 0)
         row["total"] = sum(received_by_type[person].values())
         row["top_custom_emojis"] = top_emojis(emoji_received[person])
+        row["top_tapback_stickers"] = top_stickers(tapback_stickers_received[person])
+        row["top_stuck_stickers"] = top_stickers(stuck_stickers_received[person])
         received_by_type_out.append(row)
 
     sticker_leaderboard = rank({

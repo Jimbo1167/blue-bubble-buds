@@ -337,8 +337,10 @@ private struct SortableByTypeTable: View {
                         cell(r.emphasize, highlighted: sortKey == .emphasize)
                         cell(r.question,  highlighted: sortKey == .question)
                         emojiCell(r)
-                        cell(r.tapbackSticker, highlighted: sortKey == .tapback)
-                        cell(r.stuckSticker,   highlighted: sortKey == .stuck)
+                        stickerCell(r.tapbackSticker, stickers: r.topTapbackStickers,
+                                    highlighted: sortKey == .tapback, label: "Tapback stickers")
+                        stickerCell(r.stuckSticker, stickers: r.topStuckStickers,
+                                    highlighted: sortKey == .stuck, label: "Stuck stickers")
                         cell(r.total,     highlighted: sortKey == .total, bold: true)
                     }
                 }
@@ -365,6 +367,76 @@ private struct SortableByTypeTable: View {
                 .foregroundStyle(highlighted ? Color.accentColor : .primary)
         }
         .help(r.topCustomEmojis.map { "\($0.emoji) ×\($0.count)" }.joined(separator: "  "))
+    }
+
+    @ViewBuilder
+    private func stickerCell(_ count: Int, stickers: [StickerCount], highlighted: Bool, label: String) -> some View {
+        StickerPopoverCell(count: count, stickers: stickers, highlighted: highlighted, label: label)
+    }
+}
+
+private struct StickerPopoverCell: View {
+    let count: Int
+    let stickers: [StickerCount]
+    let highlighted: Bool
+    let label: String
+    @State private var showPopover = false
+
+    var body: some View {
+        Button {
+            if !stickers.isEmpty { showPopover.toggle() }
+        } label: {
+            Text("\(count)")
+                .monospacedDigit()
+                .foregroundStyle(highlighted ? Color.accentColor : .primary)
+                .underline(!stickers.isEmpty && count > 0, color: .accentColor.opacity(0.4))
+        }
+        .buttonStyle(.plain)
+        .help(stickers.isEmpty ? "No sticker detail" : "Click to see top \(label.lowercased())")
+        .popover(isPresented: $showPopover, arrowEdge: .top) {
+            StickerPopoverContent(title: label, stickers: stickers)
+        }
+    }
+}
+
+private struct StickerPopoverContent: View {
+    let title: String
+    let stickers: [StickerCount]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            Text("Top \(stickers.count) most-used")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(stickers) { s in
+                    VStack(spacing: 4) {
+                        AsyncImage(url: s.fileURL) { phase in
+                            switch phase {
+                            case .success(let img):
+                                img.resizable().scaledToFit()
+                                    .frame(width: 72, height: 72)
+                            case .failure:
+                                Image(systemName: "photo.badge.exclamationmark")
+                                    .font(.title)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 72, height: 72)
+                            default:
+                                ProgressView().frame(width: 72, height: 72)
+                            }
+                        }
+                        Text("×\(s.count)")
+                            .font(.caption2).fontWeight(.medium)
+                            .monospacedDigit()
+                    }
+                }
+            }
+            if stickers.isEmpty {
+                Text("No stickers recorded.").font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 200)
     }
 }
 

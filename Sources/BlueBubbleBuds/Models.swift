@@ -90,6 +90,8 @@ struct ByTypeRow: Decodable, Identifiable, Hashable {
     let stuckSticker: Int
     let total: Int
     let topCustomEmojis: [EmojiCount]
+    let topTapbackStickers: [StickerCount]
+    let topStuckStickers: [StickerCount]
     var id: String { person }
 
     var sticker: Int { tapbackSticker + stuckSticker }
@@ -99,12 +101,21 @@ struct ByTypeRow: Decodable, Identifiable, Hashable {
         case tapbackSticker = "tapback_sticker"
         case stuckSticker = "stuck_sticker"
         case topCustomEmojis = "top_custom_emojis"
+        case topTapbackStickers = "top_tapback_stickers"
+        case topStuckStickers = "top_stuck_stickers"
     }
 }
 
 struct EmojiCount: Decodable, Hashable {
     let emoji: String
     let count: Int
+}
+
+struct StickerCount: Decodable, Hashable, Identifiable {
+    let path: String
+    let count: Int
+    var id: String { path }
+    var fileURL: URL { URL(fileURLWithPath: path) }
 }
 
 struct RateRow: Decodable, Identifiable, Hashable {
