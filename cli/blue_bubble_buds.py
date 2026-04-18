@@ -270,12 +270,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
              FROM message_attachment_join maj
              JOIN attachment att ON att.ROWID = maj.attachment_id
              WHERE maj.message_id = a.ROWID AND att.is_sticker = 1
-             LIMIT 1) AS sticker_uti,
-            (SELECT att.filename
-             FROM message_attachment_join maj
-             JOIN attachment att ON att.ROWID = maj.attachment_id
-             WHERE maj.message_id = a.ROWID AND att.is_sticker = 1
-             LIMIT 1) AS sticker_path
+             LIMIT 1) AS sticker_uti
         FROM active a
         JOIN message target ON target.guid = a.target_guid
         """,
@@ -296,8 +291,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             target.text AS target_text,
             target.date AS target_date,
             NULL AS emoji_char,
-            att.uti AS sticker_uti,
-            att.filename AS sticker_path
+            att.uti AS sticker_uti
         FROM message stuck
         JOIN chat_message_join cmj ON cmj.message_id = stuck.ROWID
         JOIN message target ON target.guid = (
@@ -329,11 +323,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     # Custom-emoji tallies per person (given and received)
     emoji_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     emoji_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    # Per-person sticker path tallies (separate for tapback 2007 vs stuck 1000)
-    tapback_stickers_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    stuck_stickers_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    tapback_stickers_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    stuck_stickers_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    # Sticker PATH tallies are computed lazily via the `top-stickers` subcommand
+    # so the main analyze query stays fast. The aggregate COUNTS are still
+    # computed upfront via by_type.
 
     for r in reactions:
         reactor = person_key(r["reactor_is_me"], r["reactor_handle_id"])
@@ -355,15 +347,6 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         if r["rtype"] == 2006 and r["emoji_char"]:
             emoji_given[reactor][r["emoji_char"]] += 1
             emoji_received[target][r["emoji_char"]] += 1
-        # Track specific sticker paths
-        spath = r["sticker_path"]
-        if spath:
-            if r["rtype"] == 2007:
-                tapback_stickers_given[reactor][spath] += 1
-                tapback_stickers_received[target][spath] += 1
-            elif r["rtype"] == 1000:
-                stuck_stickers_given[reactor][spath] += 1
-                stuck_stickers_received[target][spath] += 1
 
     # Top-reacted messages counts both active tapbacks AND stuck stickers.
     top_rows = conn.execute(
@@ -524,33 +507,24 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             for e, c in sorted(counts.items(), key=lambda x: -x[1])[:n]
         ]
 
-    def top_stickers(counts: dict[str, int], n: int = 5) -> list[dict]:
-        return [
-            {"path": (p or "").replace("~", str(Path.home()), 1), "count": c}
-            for p, c in sorted(counts.items(), key=lambda x: -x[1])[:n]
-            if p
-        ]
-
     by_type_out = []
     for person, _ in sorted(given.items(), key=lambda x: -x[1]):
-        row = {"person": name_for(*person)}
+        is_me, hid = person
+        row = {"person": name_for(*person), "handle_id": hid, "is_from_me": bool(is_me)}
         for tcode, label in REACTION_LABELS.items():
             row[label] = by_type[person].get(tcode, 0)
         row["total"] = sum(by_type[person].values())
         row["top_custom_emojis"] = top_emojis(emoji_given[person])
-        row["top_tapback_stickers"] = top_stickers(tapback_stickers_given[person])
-        row["top_stuck_stickers"] = top_stickers(stuck_stickers_given[person])
         by_type_out.append(row)
 
     received_by_type_out = []
     for person, _ in sorted(received.items(), key=lambda x: -x[1]):
-        row = {"person": name_for(*person)}
+        is_me, hid = person
+        row = {"person": name_for(*person), "handle_id": hid, "is_from_me": bool(is_me)}
         for tcode, label in REACTION_LABELS.items():
             row[label] = received_by_type[person].get(tcode, 0)
         row["total"] = sum(received_by_type[person].values())
         row["top_custom_emojis"] = top_emojis(emoji_received[person])
-        row["top_tapback_stickers"] = top_stickers(tapback_stickers_received[person])
-        row["top_stuck_stickers"] = top_stickers(stuck_stickers_received[person])
         received_by_type_out.append(row)
 
     sticker_leaderboard = rank({
@@ -691,6 +665,65 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         "top_messages": top_messages,
         "quiet_friends": quiet_friends,
     }
+
+
+def collect_top_stickers(
+    conn: sqlite3.Connection,
+    chat_id: int,
+    handle_id: int,
+    is_from_me: bool,
+    rtype: int,            # 2007 = tapback, 1000 = stuck
+    direction: str = "given",  # "given" or "received"
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Return a person's top sticker paths for one (chat, type, direction)."""
+    handle_match = "m.handle_id = ?" if not is_from_me else "m.is_from_me = 1"
+    params: list[Any] = [chat_id]
+
+    if rtype == 2007:
+        # Tapback stickers: scope via the active-reactions CTE.
+        sql = ACTIVE_REACTIONS_CTE + """
+            SELECT att.filename AS path, COUNT(*) AS n
+            FROM active a
+            JOIN message target ON target.guid = a.target_guid
+            JOIN message_attachment_join maj ON maj.message_id = a.ROWID
+            JOIN attachment att ON att.ROWID = maj.attachment_id AND att.is_sticker = 1
+            WHERE a.associated_message_type = 2007
+        """
+        if direction == "given":
+            sql += " AND " + ("a.is_from_me = 1" if is_from_me else "a.handle_id = :handle_id")
+        else:
+            sql += " AND " + ("target.is_from_me = 1" if is_from_me else "target.handle_id = :handle_id")
+        sql += " GROUP BY att.filename ORDER BY n DESC LIMIT :limit"
+        cur = conn.execute(sql, {"chat_id": chat_id, "handle_id": handle_id, "limit": limit})
+    else:  # 1000 stuck sticker
+        sql = """
+            SELECT att.filename AS path, COUNT(*) AS n
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN message target ON target.guid = (
+                CASE WHEN m.associated_message_guid LIKE 'bp:%' THEN substr(m.associated_message_guid, 4)
+                     WHEN m.associated_message_guid LIKE 'p:%' THEN substr(m.associated_message_guid, instr(m.associated_message_guid, '/') + 1)
+                     ELSE m.associated_message_guid END
+            )
+            JOIN message_attachment_join maj ON maj.message_id = m.ROWID
+            JOIN attachment att ON att.ROWID = maj.attachment_id AND att.is_sticker = 1
+            WHERE cmj.chat_id = :chat_id
+              AND m.associated_message_type = 1000
+        """
+        if direction == "given":
+            sql += " AND " + ("m.is_from_me = 1" if is_from_me else "m.handle_id = :handle_id")
+        else:
+            sql += " AND " + ("target.is_from_me = 1" if is_from_me else "target.handle_id = :handle_id")
+        sql += " GROUP BY att.filename ORDER BY n DESC LIMIT :limit"
+        cur = conn.execute(sql, {"chat_id": chat_id, "handle_id": handle_id, "limit": limit})
+
+    stickers = [
+        {"path": (r["path"] or "").replace("~", str(Path.home()), 1), "count": r["n"]}
+        for r in cur.fetchall() if r["path"]
+    ]
+    return {"chat_id": chat_id, "handle_id": handle_id, "is_from_me": is_from_me,
+            "rtype": rtype, "direction": direction, "stickers": stickers}
 
 
 def collect_context(
@@ -1128,6 +1161,15 @@ def main() -> int:
     p_ctx.add_argument("--before", type=int, default=12)
     p_ctx.add_argument("--after", type=int, default=12)
 
+    p_ts = sub.add_parser("top-stickers", help="Top N sticker paths for a person in a chat")
+    p_ts.add_argument("chat_id", type=int)
+    p_ts.add_argument("handle_id", type=int, help="0 for self")
+    p_ts.add_argument("--me", action="store_true", help="Match on is_from_me=1 (self)")
+    p_ts.add_argument("--rtype", type=int, choices=[2007, 1000], required=True,
+                      help="2007=tapback sticker, 1000=stuck sticker")
+    p_ts.add_argument("--direction", choices=["given", "received"], default="given")
+    p_ts.add_argument("--limit", type=int, default=5)
+
     args = ap.parse_args()
     conn = load_db(args.db)
     try:
@@ -1149,6 +1191,16 @@ def main() -> int:
                 print(json.dumps(data, indent=2, ensure_ascii=False))
             else:
                 render_stats_text(data)
+        elif args.cmd == "top-stickers":
+            data = collect_top_stickers(
+                conn, args.chat_id, args.handle_id, args.me,
+                args.rtype, args.direction, args.limit,
+            )
+            if args.json:
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+            else:
+                for s in data["stickers"]:
+                    print(f"  {s['count']:>3}x {s['path']}")
         elif args.cmd == "context":
             data = collect_context(conn, args.chat_id, args.rowid, args.before, args.after)
             if args.json:

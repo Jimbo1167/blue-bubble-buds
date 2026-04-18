@@ -79,6 +79,8 @@ struct PersonCount: Decodable, Identifiable, Hashable {
 
 struct ByTypeRow: Decodable, Identifiable, Hashable {
     let person: String
+    let handleId: Int
+    let isFromMe: Bool
     let love: Int
     let like: Int
     let dislike: Int
@@ -90,19 +92,17 @@ struct ByTypeRow: Decodable, Identifiable, Hashable {
     let stuckSticker: Int
     let total: Int
     let topCustomEmojis: [EmojiCount]
-    let topTapbackStickers: [StickerCount]
-    let topStuckStickers: [StickerCount]
     var id: String { person }
 
     var sticker: Int { tapbackSticker + stuckSticker }
 
     enum CodingKeys: String, CodingKey {
         case person, love, like, dislike, laugh, emphasize, question, emoji, total
+        case handleId = "handle_id"
+        case isFromMe = "is_from_me"
         case tapbackSticker = "tapback_sticker"
         case stuckSticker = "stuck_sticker"
         case topCustomEmojis = "top_custom_emojis"
-        case topTapbackStickers = "top_tapback_stickers"
-        case topStuckStickers = "top_stuck_stickers"
     }
 }
 
@@ -116,6 +116,22 @@ struct StickerCount: Decodable, Hashable, Identifiable {
     let count: Int
     var id: String { path }
     var fileURL: URL { URL(fileURLWithPath: path) }
+}
+
+struct TopStickersPayload: Decodable {
+    let chatId: Int
+    let handleId: Int
+    let isFromMe: Bool
+    let rtype: Int
+    let direction: String
+    let stickers: [StickerCount]
+
+    enum CodingKeys: String, CodingKey {
+        case rtype, direction, stickers
+        case chatId = "chat_id"
+        case handleId = "handle_id"
+        case isFromMe = "is_from_me"
+    }
 }
 
 struct RateRow: Decodable, Identifiable, Hashable {

@@ -106,4 +106,23 @@ struct CLIRunner {
             ]
         )
     }
+
+    static func topStickers(
+        chatId: Int,
+        handleId: Int,
+        isFromMe: Bool,
+        rtype: Int,
+        direction: String,
+        limit: Int = 5
+    ) async throws -> [StickerCount] {
+        var args = [
+            "top-stickers", String(chatId), String(handleId),
+            "--rtype", String(rtype),
+            "--direction", direction,
+            "--limit", String(limit),
+        ]
+        if isFromMe { args.append("--me") }
+        let payload: TopStickersPayload = try await run(TopStickersPayload.self, arguments: args)
+        return payload.stickers
+    }
 }

@@ -123,12 +123,16 @@ struct AnalysisView: View {
             SortableByTypeTable(
                 title: "Reactions GIVEN by reaction type",
                 subtitle: "Who gives each reaction — click a column to sort.",
-                rows: a.byType
+                rows: a.byType,
+                chatId: a.chatId,
+                direction: "given"
             )
             SortableByTypeTable(
                 title: "Reactions RECEIVED by reaction type",
                 subtitle: "Who gets each reaction on their messages — click 😂 to find the chat's funniest person.",
-                rows: a.receivedByType
+                rows: a.receivedByType,
+                chatId: a.chatId,
+                direction: "received"
             )
         }
     }
@@ -216,6 +220,8 @@ private struct SortableByTypeTable: View {
     let title: String
     let subtitle: String
     let rows: [ByTypeRow]
+    let chatId: Int
+    let direction: String
 
     enum SortKey: String, CaseIterable {
         case person, love, like, dislike, laugh, emphasize, question, emoji, tapback, stuck, total
@@ -337,9 +343,9 @@ private struct SortableByTypeTable: View {
                         cell(r.emphasize, highlighted: sortKey == .emphasize)
                         cell(r.question,  highlighted: sortKey == .question)
                         emojiCell(r)
-                        stickerCell(r.tapbackSticker, stickers: r.topTapbackStickers,
+                        stickerCell(r, count: r.tapbackSticker, rtype: 2007,
                                     highlighted: sortKey == .tapback, label: "Tapback stickers")
-                        stickerCell(r.stuckSticker, stickers: r.topStuckStickers,
+                        stickerCell(r, count: r.stuckSticker, rtype: 1000,
                                     highlighted: sortKey == .stuck, label: "Stuck stickers")
                         cell(r.total,     highlighted: sortKey == .total, bold: true)
                     }
@@ -370,73 +376,127 @@ private struct SortableByTypeTable: View {
     }
 
     @ViewBuilder
-    private func stickerCell(_ count: Int, stickers: [StickerCount], highlighted: Bool, label: String) -> some View {
-        StickerPopoverCell(count: count, stickers: stickers, highlighted: highlighted, label: label)
+    private func stickerCell(_ row: ByTypeRow, count: Int, rtype: Int, highlighted: Bool, label: String) -> some View {
+        StickerPopoverCell(
+            chatId: chatId,
+            row: row,
+            count: count,
+            rtype: rtype,
+            direction: direction,
+            highlighted: highlighted,
+            label: label
+        )
     }
 }
 
 private struct StickerPopoverCell: View {
+    let chatId: Int
+    let row: ByTypeRow
     let count: Int
-    let stickers: [StickerCount]
+    let rtype: Int
+    let direction: String
     let highlighted: Bool
     let label: String
+
     @State private var showPopover = false
 
     var body: some View {
         Button {
-            if !stickers.isEmpty { showPopover.toggle() }
+            if count > 0 { showPopover.toggle() }
         } label: {
             Text("\(count)")
                 .monospacedDigit()
                 .foregroundStyle(highlighted ? Color.accentColor : .primary)
-                .underline(!stickers.isEmpty && count > 0, color: .accentColor.opacity(0.4))
+                .underline(count > 0, color: .accentColor.opacity(0.4))
         }
         .buttonStyle(.plain)
-        .help(stickers.isEmpty ? "No sticker detail" : "Click to see top \(label.lowercased())")
+        .help(count == 0 ? "No stickers" : "Click to see top \(label.lowercased())")
         .popover(isPresented: $showPopover, arrowEdge: .top) {
-            StickerPopoverContent(title: label, stickers: stickers)
+            StickerPopoverContent(
+                title: label,
+                chatId: chatId,
+                handleId: row.handleId,
+                isFromMe: row.isFromMe,
+                rtype: rtype,
+                direction: direction
+            )
         }
     }
 }
 
 private struct StickerPopoverContent: View {
     let title: String
-    let stickers: [StickerCount]
+    let chatId: Int
+    let handleId: Int
+    let isFromMe: Bool
+    let rtype: Int
+    let direction: String
+
+    @State private var stickers: [StickerCount] = []
+    @State private var loading = true
+    @State private var error: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.headline)
-            Text("Top \(stickers.count) most-used")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack(alignment: .top, spacing: 12) {
-                ForEach(stickers) { s in
-                    VStack(spacing: 4) {
-                        AsyncImage(url: s.fileURL) { phase in
-                            switch phase {
-                            case .success(let img):
-                                img.resizable().scaledToFit()
-                                    .frame(width: 72, height: 72)
-                            case .failure:
-                                Image(systemName: "photo.badge.exclamationmark")
-                                    .font(.title)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 72, height: 72)
-                            default:
-                                ProgressView().frame(width: 72, height: 72)
+            if loading {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Loading top stickers…").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(minHeight: 80)
+            } else if let err = error {
+                Text(err).font(.caption).foregroundStyle(.red)
+            } else if stickers.isEmpty {
+                Text("No stickers recorded.").font(.caption).foregroundStyle(.tertiary)
+            } else {
+                Text("Top \(stickers.count) most-used")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(stickers) { s in
+                        VStack(spacing: 4) {
+                            AsyncImage(url: s.fileURL) { phase in
+                                switch phase {
+                                case .success(let img):
+                                    img.resizable().scaledToFit()
+                                        .frame(width: 72, height: 72)
+                                case .failure:
+                                    Image(systemName: "photo.badge.exclamationmark")
+                                        .font(.title)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 72, height: 72)
+                                default:
+                                    ProgressView().frame(width: 72, height: 72)
+                                }
                             }
+                            Text("×\(s.count)")
+                                .font(.caption2).fontWeight(.medium)
+                                .monospacedDigit()
                         }
-                        Text("×\(s.count)")
-                            .font(.caption2).fontWeight(.medium)
-                            .monospacedDigit()
                     }
                 }
             }
-            if stickers.isEmpty {
-                Text("No stickers recorded.").font(.caption).foregroundStyle(.tertiary)
-            }
         }
         .padding(16)
-        .frame(minWidth: 200)
+        .frame(minWidth: 220)
+        .task { await load() }
+    }
+
+    private func load() async {
+        loading = true
+        error = nil
+        do {
+            stickers = try await CLIRunner.topStickers(
+                chatId: chatId,
+                handleId: handleId,
+                isFromMe: isFromMe,
+                rtype: rtype,
+                direction: direction
+            )
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        loading = false
     }
 }
 
