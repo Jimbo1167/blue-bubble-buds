@@ -251,6 +251,8 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
 
     # Active tapbacks (2000-2007). Each event's sticker UTI (if applicable)
     # is joined so we can detect Live Photo stickers (public.heics).
+    # associated_message_emoji carries the actual emoji for type 2006 custom
+    # tapbacks (iOS 18+).
     reactions = list(conn.execute(
         ACTIVE_REACTIONS_CTE
         + """
@@ -263,6 +265,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             target.is_from_me AS target_is_me,
             target.text AS target_text,
             target.date AS target_date,
+            (SELECT associated_message_emoji FROM message WHERE ROWID = a.ROWID) AS emoji_char,
             (SELECT att.uti
              FROM message_attachment_join maj
              JOIN attachment att ON att.ROWID = maj.attachment_id
@@ -316,6 +319,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     stuck_count: dict[tuple[int, int], int] = defaultdict(int)
     tapback_sticker_count: dict[tuple[int, int], int] = defaultdict(int)
     live_count: dict[tuple[int, int], int] = defaultdict(int)
+    # Custom-emoji tallies per person (given and received)
+    emoji_given: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    emoji_received: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for r in reactions:
         reactor = person_key(r["reactor_is_me"], r["reactor_handle_id"])
@@ -333,6 +339,10 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         # Live Photo stickers have UTI 'public.heics' (HEIC sequence)
         if r["rtype"] in (1000, 2007) and r["sticker_uti"] == "public.heics":
             live_count[reactor] += 1
+        # Custom-emoji payload lives on 2006 tapbacks in associated_message_emoji
+        if r["rtype"] == 2006 and r["emoji_char"]:
+            emoji_given[reactor][r["emoji_char"]] += 1
+            emoji_received[target][r["emoji_char"]] += 1
 
     # Top-reacted messages counts both active tapbacks AND stuck stickers.
     top_rows = conn.execute(
@@ -487,12 +497,19 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     reactions_given = rank(given)
     reactions_received = rank(received)
 
+    def top_emojis(counts: dict[str, int], n: int = 3) -> list[dict]:
+        return [
+            {"emoji": e, "count": c}
+            for e, c in sorted(counts.items(), key=lambda x: -x[1])[:n]
+        ]
+
     by_type_out = []
     for person, _ in sorted(given.items(), key=lambda x: -x[1]):
         row = {"person": name_for(*person)}
         for tcode, label in REACTION_LABELS.items():
             row[label] = by_type[person].get(tcode, 0)
         row["total"] = sum(by_type[person].values())
+        row["top_custom_emojis"] = top_emojis(emoji_given[person])
         by_type_out.append(row)
 
     received_by_type_out = []
@@ -501,6 +518,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         for tcode, label in REACTION_LABELS.items():
             row[label] = received_by_type[person].get(tcode, 0)
         row["total"] = sum(received_by_type[person].values())
+        row["top_custom_emojis"] = top_emojis(emoji_received[person])
         received_by_type_out.append(row)
 
     sticker_leaderboard = rank({

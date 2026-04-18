@@ -89,6 +89,7 @@ struct ByTypeRow: Decodable, Identifiable, Hashable {
     let tapbackSticker: Int
     let stuckSticker: Int
     let total: Int
+    let topCustomEmojis: [EmojiCount]
     var id: String { person }
 
     var sticker: Int { tapbackSticker + stuckSticker }
@@ -97,7 +98,13 @@ struct ByTypeRow: Decodable, Identifiable, Hashable {
         case person, love, like, dislike, laugh, emphasize, question, emoji, total
         case tapbackSticker = "tapback_sticker"
         case stuckSticker = "stuck_sticker"
+        case topCustomEmojis = "top_custom_emojis"
     }
+}
+
+struct EmojiCount: Decodable, Hashable {
+    let emoji: String
+    let count: Int
 }
 
 struct RateRow: Decodable, Identifiable, Hashable {

@@ -119,6 +119,7 @@ struct AnalysisView: View {
 
     private func typeBreakdownSection(_ a: AnalysisPayload) -> some View {
         VStack(alignment: .leading, spacing: 18) {
+            legend
             SortableByTypeTable(
                 title: "Reactions GIVEN by reaction type",
                 subtitle: "Who gives each reaction — click a column to sort.",
@@ -130,6 +131,20 @@ struct AnalysisView: View {
                 rows: a.receivedByType
             )
         }
+    }
+
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Column legend").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 2) {
+                GridRow { Text("❤️ love  ·  👍 like  ·  👎 dislike  ·  😂 laugh  ·  ‼️ emphasize  ·  ❓ question").font(.caption2) }
+                GridRow { Text("✨ custom-emoji tapback (iOS 18+) — any emoji via the reaction menu; top emojis shown in each cell").font(.caption2).foregroundStyle(.secondary) }
+                GridRow { Text("👆 tapback sticker — sticker applied via the reaction menu").font(.caption2).foregroundStyle(.secondary) }
+                GridRow { Text("📌 stuck sticker — sticker dragged and dropped directly onto a message").font(.caption2).foregroundStyle(.secondary) }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func rateSection(_ a: AnalysisPayload) -> some View {
@@ -321,7 +336,7 @@ private struct SortableByTypeTable: View {
                         cell(r.laugh,     highlighted: sortKey == .laugh)
                         cell(r.emphasize, highlighted: sortKey == .emphasize)
                         cell(r.question,  highlighted: sortKey == .question)
-                        cell(r.emoji,     highlighted: sortKey == .emoji)
+                        emojiCell(r)
                         cell(r.tapbackSticker, highlighted: sortKey == .tapback)
                         cell(r.stuckSticker,   highlighted: sortKey == .stuck)
                         cell(r.total,     highlighted: sortKey == .total, bold: true)
@@ -336,6 +351,20 @@ private struct SortableByTypeTable: View {
             .monospacedDigit()
             .fontWeight(bold ? .medium : .regular)
             .foregroundStyle(highlighted ? Color.accentColor : .primary)
+    }
+
+    private func emojiCell(_ r: ByTypeRow) -> some View {
+        let highlighted = sortKey == .emoji
+        let tops = r.topCustomEmojis.prefix(3).map(\.emoji).joined()
+        return HStack(spacing: 3) {
+            if !tops.isEmpty {
+                Text(tops).font(.system(size: 10))
+            }
+            Text("\(r.emoji)")
+                .monospacedDigit()
+                .foregroundStyle(highlighted ? Color.accentColor : .primary)
+        }
+        .help(r.topCustomEmojis.map { "\($0.emoji) ×\($0.count)" }.joined(separator: "  "))
     }
 }
 
