@@ -27,18 +27,52 @@ struct ContentView: View {
                 ProgressView("Loading chats…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let err = loadError {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Couldn't load chats").font(.headline)
-                    Text(err).font(.caption).foregroundStyle(.secondary)
-                    Button("Retry") { Task { await loadChats() } }
-                }
-                .padding()
+                errorPane(err)
             } else {
                 List(chats, selection: $selection) { chat in
                     ChatRow(chat: chat).tag(chat.id)
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func errorPane(_ err: String) -> some View {
+        let isFDA = err.contains("Operation not permitted") || err.contains("authorization denied")
+        VStack(alignment: .leading, spacing: 12) {
+            if isFDA {
+                Label("Full Disk Access required", systemImage: "lock.shield")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                Text("Blue Bubble Buds needs permission to read your iMessage database.")
+                    .font(.callout)
+                Text("1. Open System Settings → Privacy & Security → Full Disk Access")
+                Text("2. Click + and add Blue Bubble Buds")
+                Text("3. Quit and relaunch this app")
+                    .padding(.bottom, 6)
+                Button("Open Full Disk Access settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .controlSize(.large)
+            } else {
+                Text("Couldn't load chats").font(.headline)
+            }
+            DisclosureGroup("Technical details") {
+                ScrollView {
+                    Text(err)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+            }
+            Button("Retry") { Task { await loadChats() } }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var placeholder: some View {
