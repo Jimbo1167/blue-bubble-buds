@@ -683,7 +683,10 @@ def collect_top_stickers(
     if rtype == 2007:
         # Tapback stickers: scope via the active-reactions CTE.
         sql = ACTIVE_REACTIONS_CTE + """
-            SELECT att.filename AS path, COUNT(*) AS n
+            SELECT
+                COALESCE(att.transfer_name, att.filename) AS sticker_key,
+                MAX(att.filename) AS path,
+                COUNT(*) AS n
             FROM active a
             JOIN message target ON target.guid = a.target_guid
             JOIN message_attachment_join maj ON maj.message_id = a.ROWID
@@ -694,11 +697,14 @@ def collect_top_stickers(
             sql += " AND " + ("a.is_from_me = 1" if is_from_me else "a.handle_id = :handle_id")
         else:
             sql += " AND " + ("target.is_from_me = 1" if is_from_me else "target.handle_id = :handle_id")
-        sql += " GROUP BY att.filename ORDER BY n DESC LIMIT :limit"
+        sql += " GROUP BY sticker_key ORDER BY n DESC LIMIT :limit"
         cur = conn.execute(sql, {"chat_id": chat_id, "handle_id": handle_id, "limit": limit})
     else:  # 1000 stuck sticker
         sql = """
-            SELECT att.filename AS path, COUNT(*) AS n
+            SELECT
+                COALESCE(att.transfer_name, att.filename) AS sticker_key,
+                MAX(att.filename) AS path,
+                COUNT(*) AS n
             FROM message m
             JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
             JOIN message target ON target.guid = (
@@ -715,7 +721,7 @@ def collect_top_stickers(
             sql += " AND " + ("m.is_from_me = 1" if is_from_me else "m.handle_id = :handle_id")
         else:
             sql += " AND " + ("target.is_from_me = 1" if is_from_me else "target.handle_id = :handle_id")
-        sql += " GROUP BY att.filename ORDER BY n DESC LIMIT :limit"
+        sql += " GROUP BY sticker_key ORDER BY n DESC LIMIT :limit"
         cur = conn.execute(sql, {"chat_id": chat_id, "handle_id": handle_id, "limit": limit})
 
     stickers = [
