@@ -273,40 +273,58 @@ private struct TopMessageRow: View {
     }
 
     private var actionButtons: some View {
-        HStack(spacing: 6) {
-            Button {
-                copySearchText()
-            } label: {
-                Image(systemName: "doc.on.doc").font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .help("Copy sender + date + snippet for searching in Messages.app")
-
-            Button {
-                openMessagesApp()
-            } label: {
-                Image(systemName: "arrow.up.forward.app").font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .help("Open Messages.app (use ⌘F to search for the copied text)")
+        Button {
+            revealInMessages()
+        } label: {
+            Label("Find", systemImage: "magnifyingglass")
+                .font(.caption)
         }
+        .buttonStyle(.borderless)
+        .help("""
+              Activate Messages.app and search for this message.
+              First use: macOS will prompt for Accessibility permission
+              (System Settings → Privacy & Security → Accessibility).
+              Without Accessibility: search text is copied to clipboard —
+              press ⌘F then ⌘V in Messages manually.
+              """)
     }
 
-    private func copySearchText() {
-        let parts = [
-            message.sender,
-            message.datetime ?? message.date,
-            message.text ?? message.kindLabel
-        ]
-        let text = parts.joined(separator: " — ")
+    /// Best search string for finding this specific message in Messages.app.
+    private var searchQuery: String {
+        if let text = message.text, !text.isEmpty {
+            // First 40 printable chars of the body — narrow enough to
+            // uniquely identify most top-reacted messages.
+            return String(text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return message.sender
+    }
+
+    private func revealInMessages() {
+        let q = searchQuery
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(text, forType: .string)
-    }
+        pb.setString(q, forType: .string)
 
-    private func openMessagesApp() {
-        if let url = URL(string: "messages:") {
-            NSWorkspace.shared.open(url)
+        // Activate Messages.app, and if Accessibility is granted, run
+        // ⌘F → ⌘V → Return to execute the search automatically.
+        let script = """
+        tell application "Messages" to activate
+        delay 0.3
+        try
+          tell application "System Events"
+            tell process "Messages"
+              keystroke "f" using command down
+              delay 0.15
+              keystroke "v" using command down
+              delay 0.1
+              key code 36
+            end tell
+          end tell
+        end try
+        """
+        if let s = NSAppleScript(source: script) {
+            var err: NSDictionary?
+            s.executeAndReturnError(&err)
         }
     }
 
