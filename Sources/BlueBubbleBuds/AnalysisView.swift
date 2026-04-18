@@ -398,11 +398,11 @@ private struct StickerPopoverCell: View {
     let highlighted: Bool
     let label: String
 
-    @State private var showPopover = false
+    @State private var showSheet = false
 
     var body: some View {
         Button {
-            if count > 0 { showPopover.toggle() }
+            if count > 0 { showSheet = true }
         } label: {
             Text("\(count)")
                 .monospacedDigit()
@@ -410,88 +410,147 @@ private struct StickerPopoverCell: View {
                 .underline(count > 0, color: .accentColor.opacity(0.4))
         }
         .buttonStyle(.plain)
-        .help(count == 0 ? "No stickers" : "Click to see top \(label.lowercased())")
-        .popover(isPresented: $showPopover, arrowEdge: .top) {
-            StickerPopoverContent(
-                title: label,
+        .help(count == 0 ? "No stickers" : "Click to see the \(label.lowercased()) \(row.person) \(direction == "given" ? "has used" : "has received")")
+        .sheet(isPresented: $showSheet) {
+            StickerSheet(
+                label: label,
+                person: row.person,
+                direction: direction,
+                totalCount: count,
                 chatId: chatId,
                 handleId: row.handleId,
                 isFromMe: row.isFromMe,
-                rtype: rtype,
-                direction: direction
+                rtype: rtype
             )
         }
     }
 }
 
-private struct StickerPopoverContent: View {
-    let title: String
+private struct StickerSheet: View {
+    let label: String
+    let person: String
+    let direction: String
+    let totalCount: Int
     let chatId: Int
     let handleId: Int
     let isFromMe: Bool
     let rtype: Int
-    let direction: String
 
+    @Environment(\.dismiss) private var dismiss
     @State private var stickers: [StickerCount] = []
     @State private var loading = true
     @State private var error: String?
 
+    private var directionLabel: String {
+        direction == "given" ? "used by \(person)" : "received by \(person)"
+    }
+
+    private var topCoverage: Int { stickers.reduce(0) { $0 + $1.count } }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline)
-            if loading {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Loading top stickers…").font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(minHeight: 80)
-            } else if let err = error {
-                Text(err).font(.caption).foregroundStyle(.red)
-            } else if stickers.isEmpty {
-                Text("No stickers recorded.").font(.caption).foregroundStyle(.tertiary)
-            } else {
-                Text("Top \(stickers.count) most-used")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(stickers) { s in
-                        VStack(spacing: 4) {
-                            AsyncImage(url: s.fileURL) { phase in
-                                switch phase {
-                                case .success(let img):
-                                    img.resizable().scaledToFit()
-                                        .frame(width: 72, height: 72)
-                                case .failure:
-                                    Image(systemName: "photo.badge.exclamationmark")
-                                        .font(.title)
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 72, height: 72)
-                                default:
-                                    ProgressView().frame(width: 72, height: 72)
-                                }
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+
+            Group {
+                if loading {
+                    VStack {
+                        ProgressView()
+                        Text("Loading stickers…").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let err = error {
+                    VStack(spacing: 10) {
+                        Text("Couldn't load stickers").font(.headline)
+                        Text(err).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if stickers.isEmpty {
+                    Text("No stickers recorded.").foregroundStyle(.tertiary).italic()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 18) {
+                            ForEach(stickers) { s in
+                                stickerTile(s)
                             }
-                            Text("×\(s.count)")
-                                .font(.caption2).fontWeight(.medium)
-                                .monospacedDigit()
                         }
+                        .padding(20)
                     }
                 }
             }
         }
-        .padding(16)
-        .frame(minWidth: 220)
+        .frame(minWidth: 620, idealWidth: 760, minHeight: 480, idealHeight: 620)
         .task { await load() }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(label) \(directionLabel)")
+                        .font(.title3).fontWeight(.semibold)
+                    Text(summaryLine)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+    }
+
+    private var summaryLine: String {
+        let total = "\(totalCount) total \(label.lowercased()) \(direction)"
+        if stickers.isEmpty { return total }
+        let cover = "Top \(stickers.count) = \(topCoverage) of \(totalCount) (\(Int(Double(topCoverage) / Double(max(totalCount, 1)) * 100))% of the total)"
+        return "\(total)   ·   \(cover)"
+    }
+
+    private var gridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 130, maximum: 170), spacing: 14)]
+    }
+
+    private func stickerTile(_ s: StickerCount) -> some View {
+        VStack(spacing: 8) {
+            AsyncImage(url: s.fileURL) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFit()
+                        .frame(width: 110, height: 110)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                case .failure:
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 110, height: 110)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                default:
+                    ProgressView()
+                        .frame(width: 110, height: 110)
+                }
+            }
+            Text("×\(s.count)")
+                .font(.subheadline).fontWeight(.semibold)
+                .monospacedDigit()
+        }
+        .frame(width: 130)
     }
 
     private func load() async {
         loading = true
         error = nil
         do {
+            // Pull more than the default 5 — the sheet has room for many.
             stickers = try await CLIRunner.topStickers(
                 chatId: chatId,
                 handleId: handleId,
                 isFromMe: isFromMe,
                 rtype: rtype,
-                direction: direction
+                direction: direction,
+                limit: 30
             )
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
