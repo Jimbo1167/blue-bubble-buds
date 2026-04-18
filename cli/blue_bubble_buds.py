@@ -30,12 +30,13 @@ REACTION_LABELS = {
     2003: "laugh",
     2004: "emphasize",
     2005: "question",
-    2006: "emoji",       # iOS 18+ custom-emoji tapback
-    2007: "sticker",     # sticker applied as a reaction
+    2006: "emoji",           # iOS 18+ custom-emoji tapback
+    2007: "tapback_sticker", # sticker applied via press-and-hold reaction menu
+    1000: "stuck_sticker",   # standalone sticker dragged onto a message
 }
 REACTION_GLYPHS = {
     2000: "❤️", 2001: "👍", 2002: "👎", 2003: "😂",
-    2004: "‼️", 2005: "❓", 2006: "✨", 2007: "🧩",
+    2004: "‼️", 2005: "❓", 2006: "✨", 2007: "🧩", 1000: "📌",
 }
 
 APPLE_EPOCH_OFFSET = int(datetime(2001, 1, 1, tzinfo=timezone.utc).timestamp())
@@ -192,7 +193,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             return "unknown"
         return all_labels.get(handle_id, f"handle#{handle_id}")
 
-    reactions = conn.execute(
+    # Active tapbacks (2000-2007). Each event's sticker UTI (if applicable)
+    # is joined so we can detect Live Photo stickers (public.heics).
+    reactions = list(conn.execute(
         ACTIVE_REACTIONS_CTE
         + """
         SELECT
@@ -203,18 +206,59 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             target.handle_id AS target_handle_id,
             target.is_from_me AS target_is_me,
             target.text AS target_text,
-            target.date AS target_date
+            target.date AS target_date,
+            (SELECT att.uti
+             FROM message_attachment_join maj
+             JOIN attachment att ON att.ROWID = maj.attachment_id
+             WHERE maj.message_id = a.ROWID AND att.is_sticker = 1
+             LIMIT 1) AS sticker_uti
         FROM active a
         JOIN message target ON target.guid = a.target_guid
         """,
         {"chat_id": chat_id},
+    ).fetchall())
+
+    # Type 1000 = stuck stickers (dragged onto a message). Additive, not deduped.
+    # rtype=1000 is preserved so we can break stuck vs tapback apart.
+    stuck_stickers = conn.execute(
+        """
+        SELECT
+            stuck.handle_id AS reactor_handle_id,
+            stuck.is_from_me AS reactor_is_me,
+            1000 AS rtype,
+            stuck.date AS rdate,
+            target.handle_id AS target_handle_id,
+            target.is_from_me AS target_is_me,
+            target.text AS target_text,
+            target.date AS target_date,
+            att.uti AS sticker_uti
+        FROM message stuck
+        JOIN chat_message_join cmj ON cmj.message_id = stuck.ROWID
+        JOIN message target ON target.guid = (
+            CASE WHEN stuck.associated_message_guid LIKE 'bp:%'
+                THEN substr(stuck.associated_message_guid, 4)
+                WHEN stuck.associated_message_guid LIKE 'p:%'
+                THEN substr(stuck.associated_message_guid, instr(stuck.associated_message_guid, '/') + 1)
+                ELSE stuck.associated_message_guid END
+        )
+        LEFT JOIN message_attachment_join maj ON maj.message_id = stuck.ROWID
+        LEFT JOIN attachment att ON att.ROWID = maj.attachment_id AND att.is_sticker = 1
+        WHERE cmj.chat_id = :chat_id
+          AND stuck.associated_message_type = 1000
+          AND stuck.associated_message_guid IS NOT NULL
+        """,
+        {"chat_id": chat_id},
     ).fetchall()
+    reactions.extend(stuck_stickers)
 
     given: dict[tuple[int, int], int] = defaultdict(int)
     received: dict[tuple[int, int], int] = defaultdict(int)
     by_type: dict[tuple[int, int], dict[int, int]] = defaultdict(lambda: defaultdict(int))
     pairwise: dict[tuple[int, int], dict[tuple[int, int], int]] = defaultdict(lambda: defaultdict(int))
     weekly: dict[tuple[int, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    stuck_count: dict[tuple[int, int], int] = defaultdict(int)
+    tapback_sticker_count: dict[tuple[int, int], int] = defaultdict(int)
+    live_count: dict[tuple[int, int], int] = defaultdict(int)
 
     for r in reactions:
         reactor = person_key(r["reactor_is_me"], r["reactor_handle_id"])
@@ -224,10 +268,36 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         by_type[reactor][r["rtype"]] += 1
         pairwise[reactor][target] += 1
         weekly[reactor][apple_ns_to_dt(r["rdate"]).strftime("%Y-W%V")] += 1
+        if r["rtype"] == 1000:
+            stuck_count[reactor] += 1
+        elif r["rtype"] == 2007:
+            tapback_sticker_count[reactor] += 1
+        # Live Photo stickers have UTI 'public.heics' (HEIC sequence)
+        if r["rtype"] in (1000, 2007) and r["sticker_uti"] == "public.heics":
+            live_count[reactor] += 1
 
+    # Top-reacted messages counts both active tapbacks AND stuck stickers.
     top_rows = conn.execute(
         ACTIVE_REACTIONS_CTE
-        + """
+        + """,
+        stuck AS (
+            SELECT
+                CASE WHEN m.associated_message_guid LIKE 'bp:%'
+                     THEN substr(m.associated_message_guid, 4)
+                     WHEN m.associated_message_guid LIKE 'p:%'
+                     THEN substr(m.associated_message_guid, instr(m.associated_message_guid, '/') + 1)
+                     ELSE m.associated_message_guid END AS target_guid
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = :chat_id
+              AND m.associated_message_type = 1000
+              AND m.associated_message_guid IS NOT NULL
+        ),
+        all_events AS (
+            SELECT target_guid FROM active
+            UNION ALL
+            SELECT target_guid FROM stuck
+        )
         SELECT
             target.ROWID AS target_rowid,
             target.text AS target_text,
@@ -235,8 +305,8 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             target.handle_id AS target_handle_id,
             target.is_from_me AS target_is_me,
             COUNT(*) AS n
-        FROM active a
-        JOIN message target ON target.guid = a.target_guid
+        FROM all_events e
+        JOIN message target ON target.guid = e.target_guid
         GROUP BY target.ROWID
         ORDER BY n DESC
         LIMIT 10
@@ -244,21 +314,38 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         {"chat_id": chat_id},
     ).fetchall()
 
-    # Stickers on visual media: includes image/video attachments AND
-    # URL preview cards (Reddit, Twitter, YouTube, news previews) AND
-    # GIFs sent via the #images extension. All three render as
-    # image-like content in Messages.app.
+    # Stickers on visual media: includes BOTH tapback stickers (2007) and
+    # stuck stickers (type 1000). Visual media = image/video attachments,
+    # URL preview cards, and #images GIFs.
     img_sticker_rows = conn.execute(
         ACTIVE_REACTIONS_CTE
-        + """
+        + """,
+        stuck AS (
+            SELECT m.handle_id, m.is_from_me, m.ROWID,
+                CASE WHEN m.associated_message_guid LIKE 'bp:%'
+                     THEN substr(m.associated_message_guid, 4)
+                     WHEN m.associated_message_guid LIKE 'p:%'
+                     THEN substr(m.associated_message_guid, instr(m.associated_message_guid, '/') + 1)
+                     ELSE m.associated_message_guid END AS target_guid
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = :chat_id
+              AND m.associated_message_type = 1000
+              AND m.associated_message_guid IS NOT NULL
+        ),
+        all_stickers AS (
+            SELECT handle_id, is_from_me, ROWID, target_guid
+            FROM active WHERE associated_message_type = 2007
+            UNION ALL
+            SELECT handle_id, is_from_me, ROWID, target_guid FROM stuck
+        )
         SELECT
             a.handle_id AS reactor_handle_id,
             a.is_from_me AS reactor_is_me,
-            COUNT(DISTINCT a.ROWID) AS n
-        FROM active a
+            COUNT(*) AS n
+        FROM all_stickers a
         JOIN message target ON target.guid = a.target_guid
-        WHERE a.associated_message_type = 2007
-          AND (
+        WHERE (
             -- URL preview cards (Reddit/Twitter/YouTube/news/etc.)
             target.balloon_bundle_id = 'com.apple.messages.URLBalloonProvider'
             -- GIF-picker extension
@@ -348,7 +435,12 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         row["total"] = sum(by_type[person].values())
         by_type_out.append(row)
 
-    sticker_leaderboard = rank({p: by_type[p].get(2007, 0) for p in by_type})
+    sticker_leaderboard = rank({
+        p: by_type[p].get(2007, 0) + by_type[p].get(1000, 0) for p in by_type
+    })
+    stuck_sticker_leaderboard = rank(stuck_count)
+    tapback_sticker_leaderboard = rank(tapback_sticker_count)
+    live_sticker_leaderboard = rank(live_count)
     emoji_leaderboard = rank({p: by_type[p].get(2006, 0) for p in by_type})
 
     stickers_on_images = [
@@ -439,6 +531,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         "reactions_received": reactions_received,
         "by_type": by_type_out,
         "sticker_leaderboard": sticker_leaderboard,
+        "stuck_sticker_leaderboard": stuck_sticker_leaderboard,
+        "tapback_sticker_leaderboard": tapback_sticker_leaderboard,
+        "live_sticker_leaderboard": live_sticker_leaderboard,
         "emoji_leaderboard": emoji_leaderboard,
         "stickers_on_visual_media": stickers_on_images,
         "reaction_rate": reaction_rate,
@@ -626,12 +721,33 @@ def render_analysis_text(d: dict) -> None:
         cells = "".join(f"{r.get(t, 0):>10}" for t in types)
         print(f"  {r['person']:<25}{cells}{r['total']:>10}")
 
-    section("3b. Sticker-only leaderboard")
+    section("3b. Sticker leaderboard (stuck + tapback combined)")
     if d["sticker_leaderboard"]:
         for r in d["sticker_leaderboard"]:
             print(f"  {r['person']:<25} {r['count']:>5}")
     else:
-        print("  No sticker reactions in this chat.")
+        print("  No sticker activity in this chat.")
+
+    section("3b-i. Stuck stickers (dragged onto messages, type 1000)")
+    if d["stuck_sticker_leaderboard"]:
+        for r in d["stuck_sticker_leaderboard"]:
+            print(f"  {r['person']:<25} {r['count']:>5}")
+    else:
+        print("  None.")
+
+    section("3b-ii. Tapback stickers (applied via reaction menu, type 2007)")
+    if d["tapback_sticker_leaderboard"]:
+        for r in d["tapback_sticker_leaderboard"]:
+            print(f"  {r['person']:<25} {r['count']:>5}")
+    else:
+        print("  None.")
+
+    section("3b-iii. Live Photo stickers (animated, public.heics)")
+    if d["live_sticker_leaderboard"]:
+        for r in d["live_sticker_leaderboard"]:
+            print(f"  {r['person']:<25} {r['count']:>5}")
+    else:
+        print("  No Live Photo stickers in this chat.")
 
     section("3c. Custom-emoji leaderboard (iOS 18+)")
     if d["emoji_leaderboard"]:

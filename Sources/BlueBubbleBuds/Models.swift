@@ -37,6 +37,9 @@ struct AnalysisPayload: Decodable {
     let reactionsReceived: [PersonCount]
     let byType: [ByTypeRow]
     let stickerLeaderboard: [PersonCount]
+    let stuckStickerLeaderboard: [PersonCount]
+    let tapbackStickerLeaderboard: [PersonCount]
+    let liveStickerLeaderboard: [PersonCount]
     let emojiLeaderboard: [PersonCount]
     let stickersOnVisualMedia: [PersonCount]
     let reactionRate: [RateRow]
@@ -53,6 +56,9 @@ struct AnalysisPayload: Decodable {
         case reactionsReceived = "reactions_received"
         case byType = "by_type"
         case stickerLeaderboard = "sticker_leaderboard"
+        case stuckStickerLeaderboard = "stuck_sticker_leaderboard"
+        case tapbackStickerLeaderboard = "tapback_sticker_leaderboard"
+        case liveStickerLeaderboard = "live_sticker_leaderboard"
         case emojiLeaderboard = "emoji_leaderboard"
         case stickersOnVisualMedia = "stickers_on_visual_media"
         case reactionRate = "reaction_rate"
@@ -78,9 +84,18 @@ struct ByTypeRow: Decodable, Identifiable, Hashable {
     let emphasize: Int
     let question: Int
     let emoji: Int
-    let sticker: Int
+    let tapbackSticker: Int
+    let stuckSticker: Int
     let total: Int
     var id: String { person }
+
+    var sticker: Int { tapbackSticker + stuckSticker }
+
+    enum CodingKeys: String, CodingKey {
+        case person, love, like, dislike, laugh, emphasize, question, emoji, total
+        case tapbackSticker = "tapback_sticker"
+        case stuckSticker = "stuck_sticker"
+    }
 }
 
 struct RateRow: Decodable, Identifiable, Hashable {

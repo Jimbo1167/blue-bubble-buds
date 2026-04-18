@@ -27,7 +27,10 @@ struct AnalysisView: View {
                         leaderboardSection("Reactions given", rows: a.reactionsGiven)
                         leaderboardSection("Reactions received", rows: a.reactionsReceived)
                         typeBreakdownSection(a)
-                        leaderboardSection("🧩 Sticker champs", rows: a.stickerLeaderboard)
+                        leaderboardSection("🧩 Sticker champs (stuck + tapback combined)", rows: a.stickerLeaderboard)
+                        leaderboardSection("📌 Stuck stickers (dragged onto messages)", rows: a.stuckStickerLeaderboard)
+                        leaderboardSection("👆 Tapback stickers (reaction menu)", rows: a.tapbackStickerLeaderboard)
+                        leaderboardSection("🎞️ Live Photo stickers (animated)", rows: a.liveStickerLeaderboard)
                         leaderboardSection("✨ Custom-emoji champs", rows: a.emojiLeaderboard)
                         leaderboardSection("📷🧩 Stickers on photos/videos", rows: a.stickersOnVisualMedia)
                         rateSection(a)
@@ -121,7 +124,7 @@ struct AnalysisView: View {
                 GridRow {
                     Text("Person").gridColumnAlignment(.leading)
                     Text("❤️"); Text("👍"); Text("👎"); Text("😂")
-                    Text("‼️"); Text("❓"); Text("✨"); Text("🧩"); Text("Total")
+                    Text("‼️"); Text("❓"); Text("✨"); Text("👆"); Text("📌"); Text("Total")
                 }
                 .font(.caption).foregroundStyle(.secondary)
                 ForEach(a.byType) { r in
@@ -134,7 +137,8 @@ struct AnalysisView: View {
                         Text("\(r.emphasize)").monospacedDigit()
                         Text("\(r.question)").monospacedDigit()
                         Text("\(r.emoji)").monospacedDigit()
-                        Text("\(r.sticker)").monospacedDigit()
+                        Text("\(r.tapbackSticker)").monospacedDigit()
+                        Text("\(r.stuckSticker)").monospacedDigit()
                         Text("\(r.total)").fontWeight(.medium).monospacedDigit()
                     }
                 }
