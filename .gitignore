@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Swift / Xcode
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# PII — generated from user's Contacts
+cli/names.json
+
+# Build artifacts
+dist/
+*.app
+*.dmg
