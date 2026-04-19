@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 import sys
-import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -99,9 +97,10 @@ def best_text(text_col: str | None, attributed_body: bytes | None) -> str | None
 
 
 def load_db(path: Path) -> sqlite3.Connection:
-    tmp = Path(tempfile.gettempdir()) / "blue_bubble_buds_chat.db"
-    shutil.copy2(path, tmp)
-    conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+    # Read the live chat.db in read-only mode. SQLite coordinates with
+    # Messages.app's concurrent writes via the existing -shm/-wal sidecars
+    # in ~/Library/Messages/ — no snapshot copy needed.
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
