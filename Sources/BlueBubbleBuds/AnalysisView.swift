@@ -6,6 +6,7 @@ struct AnalysisView: View {
     @State private var analysis: AnalysisPayload?
     @State private var loading = true
     @State private var error: String?
+    @State private var timeRange: TimeRange = .allTime
 
     var body: some View {
         Group {
@@ -23,6 +24,7 @@ struct AnalysisView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 28) {
                         header(a)
+                        timeRangeBar(a)
                         quietFriendsSection(a)
                         leaderboardSection("Reactions given", rows: a.reactionsGiven)
                         leaderboardSection("Reactions received", rows: a.reactionsReceived)
@@ -49,11 +51,37 @@ struct AnalysisView: View {
         loading = true
         error = nil
         do {
-            analysis = try await CLIRunner.analyze(chatId: chat.chatId)
+            analysis = try await CLIRunner.analyze(chatId: chat.chatId, since: timeRange.isoSince)
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         loading = false
+    }
+
+    private func timeRangeBar(_ a: AnalysisPayload) -> some View {
+        HStack(spacing: 12) {
+            Text("Time range").font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+            Picker("", selection: $timeRange) {
+                ForEach(TimeRange.allCases) { r in
+                    Text(r.rawValue).tag(r)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .onChange(of: timeRange) { _, _ in
+                Task { await load() }
+            }
+            if let since = a.timeFilter?.since {
+                Text("Since \(since)").font(.caption).foregroundStyle(.secondary)
+            }
+            if a.timeFilter?.active == true {
+                Text("(Quiet-friend detector disabled for filtered ranges)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - sections
@@ -207,10 +235,10 @@ struct AnalysisView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Top 10 most-reacted-to messages")
                 .font(.title3).fontWeight(.semibold)
-            Text("Click a row to see surrounding conversation.")
+            Text("Click a row to see surrounding conversation. The ↓ button recovers missing attachments via Messages.app.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(a.topMessages) { m in
-                TopMessageRow(message: m, chatId: a.chatId)
+                TopMessageRow(message: m, chatId: a.chatId, chatName: a.chatName)
             }
         }
     }
@@ -566,8 +594,10 @@ private struct StickerSheet: View {
 private struct TopMessageRow: View {
     let message: TopMessage
     let chatId: Int
+    let chatName: String
     @State private var enlarged = false
     @State private var showingContext = false
+    @State private var showingRecovery = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -600,6 +630,9 @@ private struct TopMessageRow: View {
             if let rowid = message.rowid {
                 ContextView(chatId: chatId, targetRowid: rowid)
             }
+        }
+        .sheet(isPresented: $showingRecovery) {
+            RecoveryView(chatId: chatId, chatName: chatName, message: message)
         }
     }
 
@@ -639,20 +672,23 @@ private struct TopMessageRow: View {
     }
 
     private var actionButtons: some View {
-        Button {
-            revealInMessages()
-        } label: {
-            Label("Find", systemImage: "magnifyingglass")
-                .font(.caption)
+        HStack(spacing: 8) {
+            Button {
+                revealInMessages()
+            } label: {
+                Label("Find", systemImage: "magnifyingglass").font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Activate Messages.app and search for this message.")
+
+            Button {
+                showingRecovery = true
+            } label: {
+                Label("Recover", systemImage: "icloud.and.arrow.down").font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .help("Drive Messages.app to fetch any missing attachments for this message from iCloud.")
         }
-        .buttonStyle(.borderless)
-        .help("""
-              Activate Messages.app and search for this message.
-              First use: macOS will prompt for Accessibility permission
-              (System Settings → Privacy & Security → Accessibility).
-              Without Accessibility: search text is copied to clipboard —
-              press ⌘F then ⌘V in Messages manually.
-              """)
     }
 
     /// Best search string for finding this specific message in Messages.app.

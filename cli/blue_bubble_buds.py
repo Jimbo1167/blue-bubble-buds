@@ -238,8 +238,17 @@ def collect_chats(conn: sqlite3.Connection, limit: int) -> list[dict]:
     return out
 
 
-def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
+def collect_analysis(
+    conn: sqlite3.Connection,
+    chat_id: int,
+    since_ns: int | None = None,
+    until_ns: int | None = None,
+) -> dict[str, Any]:
     current = current_chat_members(conn, chat_id)
+    # Convert ns bounds to datetime for display / filtering display labels
+    since_label = None
+    if since_ns is not None:
+        since_label = apple_ns_to_dt(since_ns).astimezone().strftime("%Y-%m-%d")
     all_labels = all_handle_labels(conn)
 
     def name_for(is_me: int, handle_id: int | None) -> str:
@@ -328,6 +337,11 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     # computed upfront via by_type.
 
     for r in reactions:
+        # Apply time filter (at the reaction event's own date)
+        if since_ns is not None and r["rdate"] < since_ns:
+            continue
+        if until_ns is not None and r["rdate"] > until_ns:
+            continue
         reactor = person_key(r["reactor_is_me"], r["reactor_handle_id"])
         target = person_key(r["target_is_me"], r["target_handle_id"])
         given[reactor] += 1
@@ -349,9 +363,25 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             emoji_received[target][r["emoji_char"]] += 1
 
     # Top-reacted messages counts both active tapbacks AND stuck stickers.
+    # Top-reacted messages: filter the reaction events by the time window, not
+    # the target message's date. (A recent reaction on an old message should
+    # count when filter = "last week".)
+    time_filter_active = since_ns is not None or until_ns is not None
+    active_time_filter = ""
+    stuck_time_filter = ""
+    params = {"chat_id": chat_id}
+    if since_ns is not None:
+        active_time_filter += " AND date >= :since_ns "
+        stuck_time_filter  += " AND m.date >= :since_ns "
+        params["since_ns"] = since_ns
+    if until_ns is not None:
+        active_time_filter += " AND date <= :until_ns "
+        stuck_time_filter  += " AND m.date <= :until_ns "
+        params["until_ns"] = until_ns
+
     top_rows = conn.execute(
         ACTIVE_REACTIONS_CTE
-        + """,
+        + f""",
         stuck AS (
             SELECT
                 CASE WHEN m.associated_message_guid LIKE 'bp:%'
@@ -364,9 +394,13 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             WHERE cmj.chat_id = :chat_id
               AND m.associated_message_type = 1000
               AND m.associated_message_guid IS NOT NULL
+              {stuck_time_filter}
+        ),
+        filtered_active AS (
+            SELECT target_guid FROM active WHERE 1=1 {active_time_filter}
         ),
         all_events AS (
-            SELECT target_guid FROM active
+            SELECT target_guid FROM filtered_active
             UNION ALL
             SELECT target_guid FROM stuck
         )
@@ -385,7 +419,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         ORDER BY n DESC
         LIMIT 10
         """,
-        {"chat_id": chat_id},
+        params,
     ).fetchall()
 
     # Stickers on visual media: includes BOTH tapback stickers (2007) and
@@ -393,7 +427,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     # URL preview cards, and #images GIFs.
     img_sticker_rows = conn.execute(
         ACTIVE_REACTIONS_CTE
-        + """,
+        + f""",
         stuck AS (
             SELECT m.handle_id, m.is_from_me, m.ROWID,
                 CASE WHEN m.associated_message_guid LIKE 'bp:%'
@@ -406,10 +440,11 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             WHERE cmj.chat_id = :chat_id
               AND m.associated_message_type = 1000
               AND m.associated_message_guid IS NOT NULL
+              {stuck_time_filter}
         ),
         all_stickers AS (
             SELECT handle_id, is_from_me, ROWID, target_guid
-            FROM active WHERE associated_message_type = 2007
+            FROM active WHERE associated_message_type = 2007 {active_time_filter}
             UNION ALL
             SELECT handle_id, is_from_me, ROWID, target_guid FROM stuck
         )
@@ -448,7 +483,7 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         GROUP BY a.is_from_me, a.handle_id
         ORDER BY n DESC
         """,
-        {"chat_id": chat_id},
+        params,
     ).fetchall()
 
     member_first_msg = dict(conn.execute(
@@ -477,8 +512,16 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
         first = me_first_msg if is_me_flag else member_first_msg.get(hid)
         if first is None:
             return 0
+        # Denominator window: the later of (join date) and (filter since);
+        # the earlier of (now) and (filter until).
+        effective_start = max(first, since_ns) if since_ns is not None else first
+        time_extra = ""
+        qparams = [chat_id, effective_start, hid, is_me_flag]
+        if until_ns is not None:
+            time_extra = " AND m.date <= ? "
+            qparams.append(until_ns)
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS n
             FROM message m
             JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
@@ -486,8 +529,9 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
               AND m.date >= ?
               AND NOT (COALESCE(m.handle_id,0) = ? AND m.is_from_me = ?)
               AND m.associated_message_type NOT BETWEEN 2000 AND 3007
+              {time_extra}
             """,
-            (chat_id, first, hid, is_me_flag),
+            qparams,
         ).fetchone()
         return row["n"]
 
@@ -615,40 +659,50 @@ def collect_analysis(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
             ],
         })
 
+    # Quiet-friend detector uses its own intrinsic time window (recent 4w vs
+    # prior 26w baseline). Disable when the user has a time filter active —
+    # the semantics don't compose.
     now = datetime.now(timezone.utc)
     recent_cutoff = now - timedelta(weeks=4)
     baseline_start = now - timedelta(weeks=30)
     quiet_friends: list[dict] = []
-    for person, _ in given.items():
-        recent = 0
-        baseline_by_wk: dict[str, int] = defaultdict(int)
-        for r in reactions:
-            if person_key(r["reactor_is_me"], r["reactor_handle_id"]) != person:
+    if not time_filter_active:
+        for person, _ in given.items():
+            recent = 0
+            baseline_by_wk: dict[str, int] = defaultdict(int)
+            for r in reactions:
+                if person_key(r["reactor_is_me"], r["reactor_handle_id"]) != person:
+                    continue
+                dt = apple_ns_to_dt(r["rdate"])
+                if dt >= recent_cutoff:
+                    recent += 1
+                elif baseline_start <= dt:
+                    baseline_by_wk[dt.strftime("%Y-W%V")] += 1
+            if not baseline_by_wk:
                 continue
-            dt = apple_ns_to_dt(r["rdate"])
-            if dt >= recent_cutoff:
-                recent += 1
-            elif baseline_start <= dt:
-                baseline_by_wk[dt.strftime("%Y-W%V")] += 1
-        if not baseline_by_wk:
-            continue
-        baseline_median = median(baseline_by_wk.values())
-        if baseline_median < 2:
-            continue
-        recent_per_week = recent / 4
-        if recent_per_week < 0.5 * baseline_median:
-            quiet_friends.append({
-                "person": name_for(*person),
-                "baseline_per_week": round(baseline_median, 2),
-                "recent_per_week": round(recent_per_week, 2),
-                "drop_pct": round(100 * (1 - recent_per_week / baseline_median), 1),
-            })
-    quiet_friends.sort(key=lambda x: -x["drop_pct"])
+            baseline_median = median(baseline_by_wk.values())
+            if baseline_median < 2:
+                continue
+            recent_per_week = recent / 4
+            if recent_per_week < 0.5 * baseline_median:
+                quiet_friends.append({
+                    "person": name_for(*person),
+                    "baseline_per_week": round(baseline_median, 2),
+                    "recent_per_week": round(recent_per_week, 2),
+                    "drop_pct": round(100 * (1 - recent_per_week / baseline_median), 1),
+                })
+        quiet_friends.sort(key=lambda x: -x["drop_pct"])
 
     return {
         "chat_id": chat_id,
         "chat_name": chat_name(conn, chat_id),
         "member_count": len(current),
+        "time_filter": {
+            "active": time_filter_active,
+            "since": since_label,
+            "since_ns": since_ns,
+            "until_ns": until_ns,
+        },
         "reactions_given": reactions_given,
         "reactions_received": reactions_received,
         "by_type": by_type_out,
@@ -1163,6 +1217,10 @@ def main() -> int:
 
     p_an = sub.add_parser("analyze", help="Analyze reactions for one chat")
     p_an.add_argument("chat_id", type=int)
+    p_an.add_argument("--since", type=str, default=None,
+                      help="ISO date (YYYY-MM-DD) — only include reactions on/after this date")
+    p_an.add_argument("--until", type=str, default=None,
+                      help="ISO date (YYYY-MM-DD) — only include reactions on/before this date")
 
     p_st = sub.add_parser("stats", help="Validation totals for a chat")
     p_st.add_argument("chat_id", type=int)
@@ -1192,7 +1250,15 @@ def main() -> int:
             else:
                 render_list_chats_text(data)
         elif args.cmd == "analyze":
-            data = collect_analysis(conn, args.chat_id)
+            def iso_to_apple_ns(s: str | None) -> int | None:
+                if not s: return None
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc).astimezone()
+                return int((dt.timestamp() - APPLE_EPOCH_OFFSET) * 1e9)
+            data = collect_analysis(conn, args.chat_id,
+                                    since_ns=iso_to_apple_ns(args.since),
+                                    until_ns=iso_to_apple_ns(args.until))
             if args.json:
                 print(json.dumps(data, indent=2, ensure_ascii=False))
             else:

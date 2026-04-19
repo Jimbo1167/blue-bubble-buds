@@ -92,8 +92,10 @@ struct CLIRunner {
         return payload.chats
     }
 
-    static func analyze(chatId: Int) async throws -> AnalysisPayload {
-        try await run(AnalysisPayload.self, arguments: ["analyze", String(chatId)])
+    static func analyze(chatId: Int, since: String? = nil) async throws -> AnalysisPayload {
+        var args = ["analyze", String(chatId)]
+        if let s = since { args.append(contentsOf: ["--since", s]) }
+        return try await run(AnalysisPayload.self, arguments: args)
     }
 
     static func context(chatId: Int, rowid: Int, before: Int = 12, after: Int = 12) async throws -> ContextPayload {

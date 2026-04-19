@@ -33,6 +33,7 @@ struct AnalysisPayload: Decodable {
     let chatId: Int
     let chatName: String
     let memberCount: Int
+    let timeFilter: TimeFilterInfo?
     let reactionsGiven: [PersonCount]
     let reactionsReceived: [PersonCount]
     let byType: [ByTypeRow]
@@ -53,6 +54,7 @@ struct AnalysisPayload: Decodable {
         case chatId = "chat_id"
         case chatName = "chat_name"
         case memberCount = "member_count"
+        case timeFilter = "time_filter"
         case reactionsGiven = "reactions_given"
         case reactionsReceived = "reactions_received"
         case byType = "by_type"
@@ -68,6 +70,40 @@ struct AnalysisPayload: Decodable {
         case weeklySeries = "weekly_series"
         case topMessages = "top_messages"
         case quietFriends = "quiet_friends"
+    }
+}
+
+struct TimeFilterInfo: Decodable, Hashable {
+    let active: Bool
+    let since: String?
+}
+
+enum TimeRange: String, CaseIterable, Identifiable, Hashable {
+    case allTime = "All time"
+    case week    = "Last 7 days"
+    case month   = "Last 30 days"
+    case quarter = "Last 90 days"
+    case year    = "Last year"
+
+    var id: String { rawValue }
+
+    var sinceDate: Date? {
+        let cal = Calendar.current
+        let now = Date()
+        switch self {
+        case .allTime: return nil
+        case .week:    return cal.date(byAdding: .day, value: -7, to: now)
+        case .month:   return cal.date(byAdding: .day, value: -30, to: now)
+        case .quarter: return cal.date(byAdding: .day, value: -90, to: now)
+        case .year:    return cal.date(byAdding: .year, value: -1, to: now)
+        }
+    }
+
+    var isoSince: String? {
+        guard let d = sinceDate else { return nil }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
     }
 }
 
