@@ -20,3 +20,6 @@ cli/names.json
 # Build artifacts
 dist/
 *.dmg
+
+# Local research scratchpad — not for public release
+scratch/

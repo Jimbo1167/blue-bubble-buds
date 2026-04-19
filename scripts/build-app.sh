@@ -56,6 +56,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>NSAppleEventsUsageDescription</key><string>Blue Bubble Buds drives Messages.app to trigger iCloud re-downloads of purged attachments. You can review each automation run before it happens.</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
 </dict>
