@@ -167,21 +167,26 @@ to be preserved inline.
    ```
 3. If no row (empty chat), return `{chat_id, chat_name, anchor_rowid: null,
    resolved_date: null, messages: []}`.
-4. Otherwise fetch `before` rows where `m.date < anchor.date` (ordered DESC
-   LIMIT before, then reversed), the anchor row, and `after` rows where
-   `m.date > anchor.date` (ordered ASC LIMIT after). Same structure as
-   `collect_context` does today.
+4. Otherwise fetch the "before-anchor" half ordered DESC LIMIT `before`
+   (then reversed in Python to oldest-first), the anchor row, and the
+   "after-anchor" half ordered ASC LIMIT `after`. Both halves use the
+   lexicographic `(date, ROWID)` comparator from the "Same-date tiebreak
+   for pagination" section above — see that section for the exact
+   `WHERE` / `ORDER BY`.
 
 **Before-rowid mode:**
 
-Fetch up to `limit` rows in the chat with `m.date < edge.date`
-(strict), ordered DESC LIMIT, then reversed in Python so the returned list
-is oldest-first. `anchor_rowid` and `resolved_date` are `null`.
+Fetch up to `limit` rows in the chat strictly older than the edge,
+ordered DESC by `(date, ROWID)` LIMIT `limit`, then reversed in Python
+so the returned list is oldest-first. The `WHERE` clause is the
+lexicographic comparator — see "Same-date tiebreak for pagination"
+above. `anchor_rowid` and `resolved_date` are `null`.
 
 **After-rowid mode:**
 
-Fetch up to `limit` rows with `m.date > edge.date` (strict), ordered ASC
-LIMIT. `anchor_rowid` and `resolved_date` are `null`.
+Fetch up to `limit` rows strictly newer than the edge, ordered ASC by
+`(date, ROWID)` LIMIT `limit`. Same tiebreak source as above.
+`anchor_rowid` and `resolved_date` are `null`.
 
 All modes filter `associated_message_type = 0` (same rule
 `collect_context` uses) so tapbacks and stickers don't clutter the feed.
