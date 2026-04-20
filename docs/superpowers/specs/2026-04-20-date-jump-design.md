@@ -52,8 +52,10 @@ For a picked date `D`:
 
 ## Scroll / pagination model
 
-- Initial window: 50 messages before + 50 after the anchor (anchor
-  included once, in between).
+- Initial window: 25 messages before + 25 after the anchor (anchor
+  included once, in between) — matches the visual density of the
+  existing `ContextView` (12+12) roughly scaled up for the open-ended
+  feed.
 - Pagination batch size: 50 per call.
 - "Near edge" trigger: when the user scrolls within 10 rows of the top or
   bottom of the current list, fire a fetch.
@@ -63,6 +65,50 @@ For a picked date `D`:
   client already has it — so no de-duping is needed.
 - When a fetch returns fewer than `limit` rows, that edge is marked
   exhausted and no further fetches happen on that side.
+
+### Preserving scroll position on prepend
+
+A `LazyVStack` inside a `ScrollView` on macOS does **not** keep the
+currently-visible rows pinned when new rows are inserted above — without
+explicit handling the content shifts down and the reader gets jerked.
+This is the feature's whole texture, so the plan must handle it.
+
+Primary approach (macOS 14+, available): bind the scroll position with
+`.scrollPosition(id: $scrollAnchor, anchor: .top)`. Before firing the
+prepend fetch, read the current first-visible rowid into
+`scrollAnchor`. After `messages` is updated with the prepended batch,
+SwiftUI keeps the row with that id pinned to the top of the viewport —
+the new rows grow above it and the user sees no jump.
+
+Fallback (if `scrollPosition(id:)` proves flaky on real content):
+`ScrollViewReader` + capture the pre-prepend first-visible rowid →
+update `messages` → call
+`proxy.scrollTo(capturedRowid, anchor: .top)` inside
+`withTransaction(Transaction(animation: nil))` so the reposition is
+frame-coincident with the data change.
+
+Append (bottom) doesn't need anchoring — new rows grow below the
+viewport and the user can scroll into them on their own cadence.
+
+### Same-date tiebreak for pagination
+
+Raw timestamps can collide (messages posted in the same nanosecond —
+rare but real in bulk auto-replies or re-added drafts). The anchor-
+resolution rule tiebreaks by lower `ROWID`, and pagination must use
+the same lexicographic `(date, ROWID)` comparator so tied messages
+don't fall into a hole between batches.
+
+- **Before-rowid pagination:**
+  `WHERE m.date < edge.date OR (m.date = edge.date AND m.ROWID < edge.ROWID)`
+- **After-rowid pagination:**
+  `WHERE m.date > edge.date OR (m.date = edge.date AND m.ROWID > edge.ROWID)`
+- **Date-mode "before-anchor" half:**
+  `WHERE m.date < anchor.date OR (m.date = anchor.date AND m.ROWID < anchor.ROWID)`
+- **Date-mode "after-anchor" half:**
+  `WHERE m.date > anchor.date OR (m.date = anchor.date AND m.ROWID > anchor.ROWID)`
+
+Orderings are `(date, ROWID)` in the query's natural direction so
+ordering and filtering use the same key.
 
 ## Backend — Python CLI
 
@@ -82,11 +128,28 @@ defaults to 50 for pagination modes.
 
 ### `collect_browse(conn, chat_id, *, date=None, before_rowid=None, after_rowid=None, before=50, after=50, limit=50)`
 
-Lives in `cli/blue_bubble_buds.py` alongside `collect_context`. Reuses the
-`enrich()` helper from `collect_context` unchanged — to make it reusable it
-gets extracted to module scope (or `collect_context` calls a new
-module-scope `_enrich_message(conn, row, all_labels, target_rowid=None)`
-and `collect_browse` calls the same helper with `target_rowid=anchor_rowid`).
+Lives in `cli/blue_bubble_buds.py` alongside `collect_context`. The
+`enrich()` closure inside `collect_context` is promoted to a module-scope
+helper so `collect_browse` can reuse it:
+
+```python
+def _enrich_message(conn, row, all_labels, target_rowid=None):
+    # same body as today's enrich(), with the name_for logic inlined
+    # against the passed all_labels (preserving the "me" / "unknown" /
+    # "handle#N" / known-label branches from collect_context's current
+    # name_for closure).
+    ...
+```
+
+`collect_context` calls `_enrich_message(conn, row, all_labels,
+target_rowid=target_rowid)`; `collect_browse` calls
+`_enrich_message(conn, row, all_labels, target_rowid=anchor_rowid)` (or
+`None` for pagination modes, which will simply mark every row
+`is_target=False`). The `is_from_me` / `handle_id` → name mapping must
+survive the refactor — today's `name_for` closure handles three
+branches (is_me → "me"; no handle_id → "unknown"; else
+`all_labels.get(handle_id, f"handle#{handle_id}")`) and all three need
+to be preserved inline.
 
 **Date mode:**
 
@@ -129,11 +192,19 @@ All modes filter `associated_message_type = 0` (same rule
 {
   "chat_id": 42,
   "chat_name": "Buds",
-  "anchor_rowid": 1234,       // null except in date mode
-  "resolved_date": "2024-04-12", // null except in date mode; local-tz day
+  "anchor_rowid": 1234,
+  "resolved_date": "2024-04-12",
   "messages": [ /* same shape as ContextPayload.messages */ ]
 }
 ```
+
+- `anchor_rowid` and `resolved_date` are `null` in the two pagination
+  modes (`--before-rowid`, `--after-rowid`).
+- `resolved_date` is the local-timezone **day** of the anchor message
+  (the message actually found), formatted `YYYY-MM-DD`. It is NOT an
+  echo of the picked date — its whole purpose is to show when the
+  two differ.
+- `messages[]` is always oldest-first in every mode.
 
 ## Swift client
 
@@ -182,27 +253,55 @@ New file `Sources/BlueBubbleBuds/DateBrowserView.swift`. State:
 @State private var messages: [ContextMessage] = []
 @State private var anchorRowid: Int?
 @State private var resolvedDate: String?
+@State private var scrollAnchor: Int?     // bound by .scrollPosition(id:)
 @State private var loadingInitial = false
 @State private var loadingTop = false
 @State private var loadingBottom = false
 @State private var topExhausted = false
 @State private var bottomExhausted = false
-@State private var error: String?
+@State private var topFetchError: String?
+@State private var bottomFetchError: String?
+@State private var initialError: String?
 ```
 
 Behaviour:
 
-- Submit date → clear state, set `loadingInitial`, call `browseByDate`,
-  populate `messages` + anchor, scroll to `anchorRowid` (same
-  `ScrollViewReader` pattern as `ContextView`).
-- Prepend: when the first visible rowid is within 10 of `messages.first`
-  and `!topExhausted && !loadingTop`, call `browsePage(.before,
-  edgeRowid: messages.first!.rowid)`. On return, prepend; if result count
-  `< 50`, set `topExhausted = true`.
-- Append: symmetric for `messages.last` and `bottomExhausted`.
+- **Submit date / re-pick:** Reset all of `messages = []`,
+  `anchorRowid = nil`, `resolvedDate = nil`, `topExhausted = false`,
+  `bottomExhausted = false`, `topFetchError = nil`,
+  `bottomFetchError = nil`, `initialError = nil`. Set
+  `loadingInitial = true`, call `browseByDate`, populate `messages` +
+  anchor. After data loads, set `scrollAnchor = anchorRowid` so the
+  scroll lands on the anchor row.
+- **Prepend:** when the first rendered bubble's `.onAppear` fires and
+  `!topExhausted && !loadingTop && topFetchError == nil`:
+  1. Capture `let savedTop = messages.first!.rowid`.
+  2. Set `loadingTop = true`.
+  3. Call `browsePage(.before, edgeRowid: savedTop)`.
+  4. Prepend the result. If result count `< 50`, set
+     `topExhausted = true`.
+  5. Keep `scrollAnchor = savedTop` (no change — `.scrollPosition(id:)`
+     keeps that row pinned to `.top`, so the new rows grow above
+     without visual jump).
+  6. Clear `loadingTop`.
+- **Append:** symmetric for `messages.last` and `bottomExhausted`. No
+  scroll-anchor manipulation needed for append.
 - The near-edge trigger uses `.onAppear` on the first/last rendered
   bubble, which is the standard SwiftUI idiom for `LazyVStack`-based
   infinite scroll and doesn't require GeometryReader.
+
+### Error handling in the sheet
+
+Three separate error surfaces so a mid-scroll failure doesn't nuke 300
+already-loaded messages:
+
+- `initialError` — the first `browseByDate` call failed. Full-sheet
+  error view with a Retry button, as `ContextView` does today.
+- `topFetchError` / `bottomFetchError` — a pagination call failed.
+  Render an inline "Couldn't load older messages. Tap to retry." (or
+  "newer") strip at the relevant edge of the message list. Tapping
+  clears the error flag and triggers a new fetch. `messages` stays
+  intact.
 
 ### `AnalysisView` change
 
@@ -210,10 +309,14 @@ Add a "Jump to date…" button to the header area next to Find-in-Messages.
 Presents `DateBrowserView(chat:)` as a `.sheet`. No changes to existing
 analysis rendering.
 
-## Error handling
+## Error handling (summary)
 
-- CLI non-zero exit or decode error: surface via the existing `CLIError`
-  machinery, displayed in the sheet body like `ContextView` does today.
+- CLI non-zero exit or decode error bubbles up via the existing
+  `CLIError` machinery.
+- Initial `browseByDate` failure → full-sheet error + Retry (identical
+  to today's `ContextView`).
+- Mid-scroll `browsePage` failure → inline edge retry strip, messages
+  preserved. See "Error handling in the sheet" above.
 - Network not applicable (all local).
 - Malformed date in the picker is impossible (`DatePicker` guarantees
   validity).
@@ -232,6 +335,10 @@ feature needs it):
   anchor; window is symmetric.
 - `collect_browse(date)` with date between two messages → nearest one is
   anchor; tiebreak at exact midpoint picks lower rowid.
+- `collect_browse(date)` and pagination: when two messages share the
+  same `date` nanosecond, the lexicographic `(date, ROWID)` comparator
+  partitions them correctly across batches — no row appears in both
+  sides of the boundary, and no tied row is silently dropped.
 - `collect_browse(date)` with date before the first message → anchor is
   first message.
 - `collect_browse(date)` with date after the last → anchor is last.
