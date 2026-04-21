@@ -18,6 +18,7 @@ struct DateBrowserView: View {
     @State private var bottomExhausted = false
     @State private var topFetchError: String?
     @State private var bottomFetchError: String?
+    @State private var loadToken: UUID = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -157,7 +158,9 @@ struct DateBrowserView: View {
     private func loadInitial() async {
         // Reset all state fresh — per spec: picked-date change wipes
         // messages, anchor, resolved date, and both edge exhaustion/error
-        // flags (flags land in Task 13).
+        // flags.
+        let token = UUID()
+        loadToken = token
         loadingInitial = true
         initialError = nil
         messages = []
@@ -170,6 +173,7 @@ struct DateBrowserView: View {
         bottomFetchError = nil
 
         guard let iso = DateBrowserView.iso(from: pickedDate) else {
+            guard loadToken == token else { return }
             initialError = "Couldn't format date"
             loadingInitial = false
             return
@@ -179,14 +183,17 @@ struct DateBrowserView: View {
             let payload = try await CLIRunner.browseByDate(
                 chatId: chat.chatId, date: iso, before: 25, after: 25
             )
+            guard loadToken == token else { return }
             messages = payload.messages
             anchorRowid = payload.anchorRowid
             resolvedDate = payload.resolvedDate
             scrollAnchor = payload.anchorRowid
         } catch {
+            guard loadToken == token else { return }
             initialError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
+        guard loadToken == token else { return }
         loadingInitial = false
         hasLoadedOnce = true
     }
@@ -194,6 +201,7 @@ struct DateBrowserView: View {
     private func fetchOlder() async {
         guard !loadingTop, !topExhausted, topFetchError == nil,
               let savedTop = messages.first?.rowid else { return }
+        let token = loadToken
         loadingTop = true
         do {
             let payload = try await CLIRunner.browsePage(
@@ -204,15 +212,17 @@ struct DateBrowserView: View {
             )
             let batch = payload.messages
             if batch.count < 50 { topExhausted = true }
-            if !batch.isEmpty {
+            if !batch.isEmpty, loadToken == token {
                 // Keep scrollAnchor on savedTop — .scrollPosition(id:)
                 // pins that row in place while new rows grow above.
                 messages = batch + messages
                 scrollAnchor = savedTop
             }
         } catch {
-            topFetchError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
+            if loadToken == token {
+                topFetchError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
         }
         loadingTop = false
     }
@@ -220,6 +230,7 @@ struct DateBrowserView: View {
     private func fetchNewer() async {
         guard !loadingBottom, !bottomExhausted, bottomFetchError == nil,
               let savedBottom = messages.last?.rowid else { return }
+        let token = loadToken
         loadingBottom = true
         do {
             let payload = try await CLIRunner.browsePage(
@@ -230,12 +241,14 @@ struct DateBrowserView: View {
             )
             let batch = payload.messages
             if batch.count < 50 { bottomExhausted = true }
-            if !batch.isEmpty {
+            if !batch.isEmpty, loadToken == token {
                 messages = messages + batch
             }
         } catch {
-            bottomFetchError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
+            if loadToken == token {
+                bottomFetchError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
         }
         loadingBottom = false
     }
