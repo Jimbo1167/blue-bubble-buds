@@ -127,4 +127,38 @@ struct CLIRunner {
         let payload: TopStickersPayload = try await run(TopStickersPayload.self, arguments: args)
         return payload.stickers
     }
+
+    static func browseByDate(
+        chatId: Int,
+        date: String,
+        before: Int = 25,
+        after: Int = 25
+    ) async throws -> BrowsePayload {
+        try await run(
+            BrowsePayload.self,
+            arguments: [
+                "browse", String(chatId),
+                "--date", date,
+                "--before", String(before),
+                "--after", String(after),
+            ]
+        )
+    }
+
+    static func browsePage(
+        chatId: Int,
+        edgeRowid: Int,
+        direction: BrowseDirection,
+        limit: Int = 50
+    ) async throws -> BrowsePayload {
+        let flag = direction == .before ? "--before-rowid" : "--after-rowid"
+        return try await run(
+            BrowsePayload.self,
+            arguments: [
+                "browse", String(chatId),
+                flag, String(edgeRowid),
+                "--limit", String(limit),
+            ]
+        )
+    }
 }
