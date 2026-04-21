@@ -55,11 +55,27 @@ First launch: macOS Gatekeeper may warn — right-click the app → **Open** →
 
 ```sh
 python3 cli/build_names.py          # optional
-swift run                           # launches the app
+swift run BlueBubbleBuds            # launches the app window
+```
+
+The first run takes ~10-30s to compile; subsequent runs are fast. The app window should come to the foreground automatically — if it doesn't, check that your terminal has Full Disk Access granted (see below).
+
+CLI backend is runnable standalone for debugging:
+
+```sh
 python3 cli/blue_bubble_buds.py list-chats
 python3 cli/blue_bubble_buds.py analyze <chat_id>
 python3 cli/blue_bubble_buds.py stats <chat_id>
+python3 cli/blue_bubble_buds.py browse <chat_id> --date 2024-06-15
 ```
+
+Running the test suite (optional, dev only):
+
+```sh
+python3 -m pytest cli/tests/ -v
+```
+
+**When to use which option.** Option A produces a signed, installable `.app` you launch from Spotlight. Option B compiles and runs straight from source in ~10s with no install step — pick this for iterating on the code. Both paths read the same live `chat.db`; they differ only in packaging.
 
 ## Naming people (`names.json`)
 
