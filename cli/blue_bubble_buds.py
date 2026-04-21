@@ -953,6 +953,12 @@ def collect_browse(
     """Browse a chat's messages by date or by pagination edge rowid.
 
     Exactly one of `date`, `before_rowid`, `after_rowid` must be provided.
+
+    Parameters by mode:
+        date mode:       uses `before` and `after` as window sizes (`limit` is ignored).
+        before_rowid:    uses `limit`; `before` and `after` are ignored.
+        after_rowid:     uses `limit`; `before` and `after` are ignored.
+
     Always returns {chat_id, chat_name, anchor_rowid, resolved_date, messages}
     where anchor_rowid/resolved_date are null in pagination modes and
     messages is always oldest-first. Excludes reaction/sticker rows

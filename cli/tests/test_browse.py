@@ -1,6 +1,7 @@
 """Tests for collect_browse."""
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import blue_bubble_buds as bbb
@@ -61,3 +62,16 @@ def test_date_mode_marks_anchor_as_target(db):
     targets = [m for m in out["messages"] if m["is_target"]]
     assert len(targets) == 1
     assert targets[0]["rowid"] == out["anchor_rowid"]
+
+
+# ---------- mode validation ----------
+
+
+def test_no_mode_provided_raises(db):
+    with pytest.raises(ValueError, match="exactly one of date, before_rowid, after_rowid"):
+        bbb.collect_browse(db, chat_id=1)
+
+
+def test_multiple_modes_provided_raises(db):
+    with pytest.raises(ValueError, match="exactly one of date, before_rowid, after_rowid"):
+        bbb.collect_browse(db, chat_id=1, date="2024-01-01", before_rowid=101)
