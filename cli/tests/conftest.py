@@ -151,3 +151,40 @@ def db_with_tied_dates() -> sqlite3.Connection:
     )
     conn.commit()
     return conn
+
+
+@pytest.fixture
+def db_two_chats_with_messages() -> sqlite3.Connection:
+    """In-memory DB where BOTH chats have messages.
+
+    chat 1 "Alpha": rowids 301-303
+    chat 2 "Beta":  rowids 311-313
+    Used to verify pagination from a rowid in chat A, with chat_id=A,
+    doesn't bleed into chat B's messages.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _schema(conn)
+    conn.execute(
+        "INSERT INTO chat (ROWID, display_name, chat_identifier, style) "
+        "VALUES (1, 'Alpha', 'chat-alpha', 43), "
+        "(2, 'Beta', 'chat-beta', 43)"
+    )
+    conn.execute("INSERT INTO handle (ROWID, id) VALUES (1, 'alice')")
+    conn.execute(
+        "INSERT INTO chat_handle_join (chat_id, handle_id) "
+        "VALUES (1, 1), (2, 1)"
+    )
+    base = 3_000_000_000
+    _insert_messages(conn, 1, [
+        (301, 1, 0, "alpha-1", base + 0),
+        (302, 1, 0, "alpha-2", base + 100),
+        (303, 1, 0, "alpha-3", base + 200),
+    ])
+    _insert_messages(conn, 2, [
+        (311, 1, 0, "beta-1", base + 50),
+        (312, 1, 0, "beta-2", base + 150),
+        (313, 1, 0, "beta-3", base + 250),
+    ])
+    conn.commit()
+    return conn

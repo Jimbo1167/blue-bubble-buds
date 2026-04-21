@@ -100,3 +100,42 @@ def test_before_rowid_from_oldest_is_empty(db):
 def test_before_rowid_unknown_rowid_returns_empty(db):
     out = bbb.collect_browse(db, chat_id=1, before_rowid=99999, limit=10)
     assert out["messages"] == []
+
+
+# ---------- after-rowid pagination ----------
+
+def test_after_rowid_returns_newer_batch(db):
+    out = bbb.collect_browse(db, chat_id=1, after_rowid=103, limit=3)
+    assert out["anchor_rowid"] is None
+    assert out["resolved_date"] is None
+    assert _rowids(out) == [104, 105, 106]
+
+
+def test_after_rowid_excludes_edge(db):
+    out = bbb.collect_browse(db, chat_id=1, after_rowid=103, limit=10)
+    assert 103 not in _rowids(out)
+
+
+def test_after_rowid_from_newest_is_empty(db):
+    out = bbb.collect_browse(db, chat_id=1, after_rowid=108, limit=10)
+    assert out["messages"] == []
+
+
+def test_pagination_is_chat_scoped(db_two_chats_with_messages):
+    # before-rowid: edge from chat 2, querying chat 1 → empty (no chat-1
+    # rows are strictly older than a rowid that lives in chat 2).
+    out = bbb.collect_browse(db_two_chats_with_messages, chat_id=1,
+                             before_rowid=313, limit=10)
+    ids = _rowids(out)
+    assert 311 not in ids and 312 not in ids and 313 not in ids
+
+    # after-rowid: edge from chat 2, querying chat 1. Chat 1 has rows
+    # strictly newer than chat 2's rowid 311's date, but they live in
+    # chat 1 — the chat_id scope filter is what gates the result.
+    out = bbb.collect_browse(db_two_chats_with_messages, chat_id=1,
+                             after_rowid=311, limit=10)
+    ids = _rowids(out)
+    assert 311 not in ids and 312 not in ids and 313 not in ids
+    # But chat 1's newer messages must appear (302, 303 are newer than
+    # chat 2 rowid 311's date of base+50, since 302=base+100, 303=base+200).
+    assert 302 in ids or 303 in ids  # at least one chat-1 row newer than base+50

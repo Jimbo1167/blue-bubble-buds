@@ -1068,8 +1068,21 @@ def collect_browse(
         ).fetchall()
         ordered = list(reversed(rows))
     else:
-        # after_rowid branch lands in Task 6.
-        raise NotImplementedError("after_rowid mode lands in Task 6")
+        rows = conn.execute(
+            """
+            SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+                   m.attributedBody, m.balloon_bundle_id
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = ?
+              AND m.associated_message_type = 0
+              AND (m.date > ? OR (m.date = ? AND m.ROWID > ?))
+            ORDER BY m.date ASC, m.ROWID ASC
+            LIMIT ?
+            """,
+            (chat_id, edge["date"], edge["date"], edge["ROWID"], limit),
+        ).fetchall()
+        ordered = rows
 
     messages = [
         _enrich_message(conn, r, all_labels, target_rowid=None)
