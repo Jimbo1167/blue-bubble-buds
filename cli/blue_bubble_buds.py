@@ -115,6 +115,19 @@ def apple_ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1e9 + APPLE_EPOCH_OFFSET, tz=timezone.utc)
 
 
+def iso_to_apple_ns(s: str) -> int:
+    """Convert YYYY-MM-DD (or full ISO datetime) to Apple-epoch nanoseconds.
+
+    Matches the historic behavior of the inline helper in main(): naive
+    datetimes are treated as UTC and then converted to the system-local
+    instant before being measured against APPLE_EPOCH_OFFSET.
+    """
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc).astimezone()
+    return int((dt.timestamp() - APPLE_EPOCH_OFFSET) * 1e9)
+
+
 ACTIVE_REACTIONS_CTE = """
 WITH chat_msgs AS (
     SELECT m.guid AS guid, m.ROWID AS rowid
@@ -791,6 +804,65 @@ def collect_top_stickers(
             "rtype": rtype, "direction": direction, "stickers": stickers}
 
 
+def _enrich_message(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    all_labels: dict[int, str],
+    target_rowid: int | None,
+) -> dict[str, Any]:
+    """Serialize a single message row to the dict shape consumed by the Swift
+    client. Used by both collect_context and collect_browse."""
+    atts = conn.execute(
+        """
+        SELECT att.filename, att.transfer_name, att.mime_type, att.uti, att.is_sticker
+        FROM message_attachment_join maj
+        JOIN attachment att ON att.ROWID = maj.attachment_id
+        WHERE maj.message_id = ?
+        """,
+        (row["ROWID"],),
+    ).fetchall()
+    rxn = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM message r
+        WHERE r.associated_message_guid IN ('bp:' || ?, 'p:0/' || ?, 'p:1/' || ?, 'p:2/' || ?)
+          AND (r.associated_message_type BETWEEN 2000 AND 2007 OR r.associated_message_type = 1000)
+        """,
+        (row["guid"], row["guid"], row["guid"], row["guid"]),
+    ).fetchone()["n"]
+    dt_local = apple_ns_to_dt(row["date"]).astimezone()
+
+    if row["is_from_me"]:
+        sender = "me"
+    elif not row["handle_id"]:
+        sender = "unknown"
+    else:
+        sender = all_labels.get(row["handle_id"], f"handle#{row['handle_id']}")
+
+    return {
+        "rowid": row["ROWID"],
+        "guid": row["guid"],
+        "sender": sender,
+        "is_from_me": bool(row["is_from_me"]),
+        "datetime": dt_local.strftime("%Y-%m-%d %H:%M"),
+        "date": dt_local.strftime("%Y-%m-%d"),
+        "is_target": target_rowid is not None and row["ROWID"] == target_rowid,
+        "text": best_text(row["text"], row["attributedBody"]),
+        "balloon_bundle_id": row["balloon_bundle_id"],
+        "reaction_count": rxn,
+        "attachments": [
+            {
+                "path": (a["filename"] or "").replace("~", str(Path.home()), 1) or None,
+                "name": a["transfer_name"],
+                "mime_type": a["mime_type"],
+                "uti": a["uti"],
+                "is_sticker": bool(a["is_sticker"]),
+            }
+            for a in atts
+        ],
+    }
+
+
 def collect_context(
     conn: sqlite3.Connection,
     chat_id: int,
@@ -806,13 +878,6 @@ def collect_context(
     """
     all_labels = all_handle_labels(conn)
 
-    def name_for(is_me: int, handle_id: int | None) -> str:
-        if is_me:
-            return "me"
-        if not handle_id:
-            return "unknown"
-        return all_labels.get(handle_id, f"handle#{handle_id}")
-
     target = conn.execute(
         "SELECT ROWID, guid, date FROM message WHERE ROWID = ?",
         (target_rowid,),
@@ -822,8 +887,6 @@ def collect_context(
 
     target_date = target["date"]
 
-    # Fetch messages before and after the target, within the chat.
-    # Exclude tapback/sticker rows (they're reactions, not content).
     before_rows = conn.execute(
         """
         SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
@@ -862,54 +925,11 @@ def collect_context(
     ).fetchall()
 
     ordered = list(reversed(before_rows)) + [target_row] + list(after_rows)
-
-    def enrich(row: sqlite3.Row) -> dict[str, Any]:
-        if row is None:
-            return None
-        atts = conn.execute(
-            """
-            SELECT att.filename, att.transfer_name, att.mime_type, att.uti, att.is_sticker
-            FROM message_attachment_join maj
-            JOIN attachment att ON att.ROWID = maj.attachment_id
-            WHERE maj.message_id = ?
-            """,
-            (row["ROWID"],),
-        ).fetchall()
-        # Count reactions on this message (tapbacks + stuck stickers)
-        rxn = conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM message r
-            WHERE r.associated_message_guid IN ('bp:' || ?, 'p:0/' || ?, 'p:1/' || ?, 'p:2/' || ?)
-              AND (r.associated_message_type BETWEEN 2000 AND 2007 OR r.associated_message_type = 1000)
-            """,
-            (row["guid"], row["guid"], row["guid"], row["guid"]),
-        ).fetchone()["n"]
-        dt_local = apple_ns_to_dt(row["date"]).astimezone()
-        return {
-            "rowid": row["ROWID"],
-            "guid": row["guid"],
-            "sender": name_for(row["is_from_me"], row["handle_id"]),
-            "is_from_me": bool(row["is_from_me"]),
-            "datetime": dt_local.strftime("%Y-%m-%d %H:%M"),
-            "date": dt_local.strftime("%Y-%m-%d"),
-            "is_target": row["ROWID"] == target_rowid,
-            "text": best_text(row["text"], row["attributedBody"]),
-            "balloon_bundle_id": row["balloon_bundle_id"],
-            "reaction_count": rxn,
-            "attachments": [
-                {
-                    "path": (a["filename"] or "").replace("~", str(Path.home()), 1) or None,
-                    "name": a["transfer_name"],
-                    "mime_type": a["mime_type"],
-                    "uti": a["uti"],
-                    "is_sticker": bool(a["is_sticker"]),
-                }
-                for a in atts
-            ],
-        }
-
-    messages = [enrich(r) for r in ordered if r is not None]
+    messages = [
+        _enrich_message(conn, r, all_labels, target_rowid=target_rowid)
+        for r in ordered
+        if r is not None
+    ]
 
     return {
         "chat_id": chat_id,
@@ -1249,15 +1269,11 @@ def main() -> int:
             else:
                 render_list_chats_text(data)
         elif args.cmd == "analyze":
-            def iso_to_apple_ns(s: str | None) -> int | None:
-                if not s: return None
-                dt = datetime.fromisoformat(s)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc).astimezone()
-                return int((dt.timestamp() - APPLE_EPOCH_OFFSET) * 1e9)
+            def _opt_ns(s: str | None) -> int | None:
+                return iso_to_apple_ns(s) if s else None
             data = collect_analysis(conn, args.chat_id,
-                                    since_ns=iso_to_apple_ns(args.since),
-                                    until_ns=iso_to_apple_ns(args.until))
+                                    since_ns=_opt_ns(args.since),
+                                    until_ns=_opt_ns(args.until))
             if args.json:
                 print(json.dumps(data, indent=2, ensure_ascii=False))
             else:
