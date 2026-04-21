@@ -336,3 +336,26 @@ struct QuietFriend: Decodable, Identifiable, Hashable {
         case dropPct = "drop_pct"
     }
 }
+
+// MARK: - browse payload
+
+struct BrowsePayload: Decodable {
+    let chatId: Int
+    let chatName: String
+    let anchorRowid: Int?
+    let resolvedDate: String?
+    let messages: [ContextMessage]
+
+    enum CodingKeys: String, CodingKey {
+        case chatId = "chat_id"
+        case chatName = "chat_name"
+        case anchorRowid = "anchor_rowid"
+        case resolvedDate = "resolved_date"
+        case messages
+    }
+}
+
+enum BrowseDirection {
+    case before
+    case after
+}
