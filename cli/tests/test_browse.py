@@ -75,3 +75,28 @@ def test_no_mode_provided_raises(db):
 def test_multiple_modes_provided_raises(db):
     with pytest.raises(ValueError, match="exactly one of date, before_rowid, after_rowid"):
         bbb.collect_browse(db, chat_id=1, date="2024-01-01", before_rowid=101)
+
+
+# ---------- before-rowid pagination ----------
+
+def test_before_rowid_returns_older_batch(db):
+    out = bbb.collect_browse(db, chat_id=1, before_rowid=106, limit=3)
+    assert out["anchor_rowid"] is None
+    assert out["resolved_date"] is None
+    # Older than 106, max 3 rows, oldest-first
+    assert _rowids(out) == [103, 104, 105]
+
+
+def test_before_rowid_excludes_edge(db):
+    out = bbb.collect_browse(db, chat_id=1, before_rowid=106, limit=10)
+    assert 106 not in _rowids(out)
+
+
+def test_before_rowid_from_oldest_is_empty(db):
+    out = bbb.collect_browse(db, chat_id=1, before_rowid=101, limit=10)
+    assert out["messages"] == []
+
+
+def test_before_rowid_unknown_rowid_returns_empty(db):
+    out = bbb.collect_browse(db, chat_id=1, before_rowid=99999, limit=10)
+    assert out["messages"] == []

@@ -1039,8 +1039,43 @@ def collect_browse(
             "messages": messages,
         }
 
-    # Pagination modes handled in Task 5 and Task 6.
-    raise NotImplementedError("pagination modes land in subsequent tasks")
+    # Pagination modes: look up the edge row once, then fetch strictly
+    # older-than (before-rowid) or strictly newer-than (after-rowid),
+    # using lexicographic (date, ROWID) so same-nanosecond ties don't
+    # fall between batches.
+    edge_rowid = before_rowid if before_rowid is not None else after_rowid
+    edge = conn.execute(
+        "SELECT ROWID, date FROM message WHERE ROWID = ?",
+        (edge_rowid,),
+    ).fetchone()
+    if edge is None:
+        return {**base, "messages": []}
+
+    if before_rowid is not None:
+        rows = conn.execute(
+            """
+            SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+                   m.attributedBody, m.balloon_bundle_id
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = ?
+              AND m.associated_message_type = 0
+              AND (m.date < ? OR (m.date = ? AND m.ROWID < ?))
+            ORDER BY m.date DESC, m.ROWID DESC
+            LIMIT ?
+            """,
+            (chat_id, edge["date"], edge["date"], edge["ROWID"], limit),
+        ).fetchall()
+        ordered = list(reversed(rows))
+    else:
+        # after_rowid branch lands in Task 6.
+        raise NotImplementedError("after_rowid mode lands in Task 6")
+
+    messages = [
+        _enrich_message(conn, r, all_labels, target_rowid=None)
+        for r in ordered
+    ]
+    return {**base, "messages": messages}
 
 
 def collect_stats(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
