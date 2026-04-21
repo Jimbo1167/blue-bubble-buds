@@ -136,6 +136,9 @@ def db_with_tied_dates() -> sqlite3.Connection:
         "VALUES (1, 'Tied', 'chat-tied', 43)"
     )
     conn.execute("INSERT INTO handle (ROWID, id) VALUES (1, 'alice')")
+    conn.execute(
+        "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (1, 1)"
+    )
     base = 2_000_000_000
     _insert_messages(
         conn,
