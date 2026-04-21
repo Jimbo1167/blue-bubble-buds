@@ -12,6 +12,12 @@ struct DateBrowserView: View {
     @State private var loadingInitial = false
     @State private var initialError: String?
     @State private var hasLoadedOnce = false
+    @State private var loadingTop = false
+    @State private var loadingBottom = false
+    @State private var topExhausted = false
+    @State private var bottomExhausted = false
+    @State private var topFetchError: String?
+    @State private var bottomFetchError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,18 +72,53 @@ struct DateBrowserView: View {
     private var messageList: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                ForEach(messages) { m in
+                if let err = topFetchError {
+                    edgeRetry(label: "Couldn't load older messages.", err: err) {
+                        topFetchError = nil
+                        Task { await fetchOlder() }
+                    }
+                } else if loadingTop {
+                    ProgressView().padding(.vertical, 6)
+                }
+
+                ForEach(Array(messages.enumerated()), id: \.element.rowid) { idx, m in
                     MessageBubble(message: m)
+                        .onAppear {
+                            // Near-edge trigger: within 10 rows of either end.
+                            if idx < 10 { Task { await fetchOlder() } }
+                            if idx >= messages.count - 10 { Task { await fetchNewer() } }
+                        }
+                }
+
+                if let err = bottomFetchError {
+                    edgeRetry(label: "Couldn't load newer messages.", err: err) {
+                        bottomFetchError = nil
+                        Task { await fetchNewer() }
+                    }
+                } else if loadingBottom {
+                    ProgressView().padding(.vertical, 6)
                 }
             }
             .scrollTargetLayout()
             .padding(20)
         }
-        // .top anchor is what makes the prepend-preservation trick in
-        // Task 13 work: writing scrollAnchor = savedTop after prepending
-        // pins that row at the top of the viewport so new rows grow above
-        // without a visible jump.
         .scrollPosition(id: $scrollAnchor, anchor: .top)
+    }
+
+    @ViewBuilder
+    private func edgeRetry(label: String, err: String, retry: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(label).font(.caption)
+            Button("Retry", action: retry)
+                .buttonStyle(.borderless)
+                .font(.caption)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .help(err)
     }
 
     private var promptView: some View {
@@ -123,6 +164,10 @@ struct DateBrowserView: View {
         anchorRowid = nil
         resolvedDate = nil
         scrollAnchor = nil
+        topExhausted = false
+        bottomExhausted = false
+        topFetchError = nil
+        bottomFetchError = nil
 
         guard let iso = DateBrowserView.iso(from: pickedDate) else {
             initialError = "Couldn't format date"
@@ -144,6 +189,55 @@ struct DateBrowserView: View {
         }
         loadingInitial = false
         hasLoadedOnce = true
+    }
+
+    private func fetchOlder() async {
+        guard !loadingTop, !topExhausted, topFetchError == nil,
+              let savedTop = messages.first?.rowid else { return }
+        loadingTop = true
+        do {
+            let payload = try await CLIRunner.browsePage(
+                chatId: chat.chatId,
+                edgeRowid: savedTop,
+                direction: .before,
+                limit: 50
+            )
+            let batch = payload.messages
+            if batch.count < 50 { topExhausted = true }
+            if !batch.isEmpty {
+                // Keep scrollAnchor on savedTop — .scrollPosition(id:)
+                // pins that row in place while new rows grow above.
+                messages = batch + messages
+                scrollAnchor = savedTop
+            }
+        } catch {
+            topFetchError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+        loadingTop = false
+    }
+
+    private func fetchNewer() async {
+        guard !loadingBottom, !bottomExhausted, bottomFetchError == nil,
+              let savedBottom = messages.last?.rowid else { return }
+        loadingBottom = true
+        do {
+            let payload = try await CLIRunner.browsePage(
+                chatId: chat.chatId,
+                edgeRowid: savedBottom,
+                direction: .after,
+                limit: 50
+            )
+            let batch = payload.messages
+            if batch.count < 50 { bottomExhausted = true }
+            if !batch.isEmpty {
+                messages = messages + batch
+            }
+        } catch {
+            bottomFetchError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+        loadingBottom = false
     }
 
     static func iso(from date: Date) -> String? {
