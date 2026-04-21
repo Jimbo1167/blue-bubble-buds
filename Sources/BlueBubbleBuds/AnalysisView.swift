@@ -7,6 +7,7 @@ struct AnalysisView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var timeRange: TimeRange = .allTime
+    @State private var showingDateBrowser = false
 
     var body: some View {
         Group {
@@ -44,6 +45,9 @@ struct AnalysisView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingDateBrowser) {
+            DateBrowserView(chat: chat)
+        }
         .task { await load() }
     }
 
@@ -79,6 +83,13 @@ struct AnalysisView: View {
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
+            Button {
+                showingDateBrowser = true
+            } label: {
+                Label("Jump to date…", systemImage: "calendar")
+                    .font(.caption)
+            }
+            .help("Pick a date and scroll through messages from around that time.")
         }
         .padding(10)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
