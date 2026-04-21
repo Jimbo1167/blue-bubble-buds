@@ -139,3 +139,65 @@ def test_pagination_is_chat_scoped(db_two_chats_with_messages):
     # But chat 1's newer messages must appear (302, 303 are newer than
     # chat 2 rowid 311's date of base+50, since 302=base+100, 303=base+200).
     assert 302 in ids or 303 in ids  # at least one chat-1 row newer than base+50
+
+
+# ---------- same-date tiebreak ----------
+
+def test_tied_dates_all_appear_in_date_window(db_with_tied_dates):
+    # 201 and 202 share the exact same date_ns. Whichever is NOT the
+    # anchor must still appear in the window — a naive strict
+    # `m.date < anchor.date` comparator would drop it. The lexicographic
+    # (date, ROWID) comparator prevents that.
+    out = bbb.collect_browse(db_with_tied_dates, chat_id=1,
+                             date="2030-01-01", before=10, after=10)
+    ids = _rowids(out)
+    assert 201 in ids
+    assert 202 in ids
+    assert 203 in ids
+
+
+def test_tied_dates_pagination_split_correctly(db_with_tied_dates):
+    # After-rowid from 201: should yield 202 (tied date, higher rowid)
+    # then 203, not skip 202.
+    out = bbb.collect_browse(db_with_tied_dates, chat_id=1,
+                             after_rowid=201, limit=10)
+    assert _rowids(out) == [202, 203]
+
+    # Before-rowid from 202: should yield 201 (tied date, lower rowid),
+    # not skip it.
+    out = bbb.collect_browse(db_with_tied_dates, chat_id=1,
+                             before_rowid=202, limit=10)
+    assert _rowids(out) == [201]
+
+
+# ---------- reaction rows excluded ----------
+
+def test_reaction_rows_excluded_from_feed(db):
+    # Inject a tapback row (associated_message_type = 2000) pointing at
+    # message 104. It must NOT appear in any browse result.
+    db.execute(
+        "INSERT INTO message (ROWID, guid, handle_id, is_from_me, date, "
+        "text, associated_message_type, associated_message_guid) "
+        "VALUES (999, 'rxn-guid', 1, 0, ?, NULL, 2000, 'p:0/guid-104')",
+        (1_000_000_350,),
+    )
+    db.execute(
+        "INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 999)"
+    )
+    db.commit()
+
+    # Date-mode
+    out = bbb.collect_browse(db, chat_id=1, date="2030-01-01",
+                             before=10, after=10)
+    assert 999 not in _rowids(out)
+    # Reactions still count against the targeted message
+    target = next(m for m in out["messages"] if m["rowid"] == 104)
+    assert target["reaction_count"] == 1
+
+    # After-rowid pagination
+    out = bbb.collect_browse(db, chat_id=1, after_rowid=103, limit=10)
+    assert 999 not in _rowids(out)
+
+    # Before-rowid pagination
+    out = bbb.collect_browse(db, chat_id=1, before_rowid=108, limit=10)
+    assert 999 not in _rowids(out)
