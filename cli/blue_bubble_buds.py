@@ -1411,6 +1411,16 @@ def main() -> int:
     p_ts.add_argument("--direction", choices=["given", "received"], default="given")
     p_ts.add_argument("--limit", type=int, default=5)
 
+    p_br = sub.add_parser("browse", help="Browse messages around a date, or paginate from an edge rowid")
+    p_br.add_argument("chat_id", type=int)
+    mode = p_br.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--date", type=str, help="ISO date (YYYY-MM-DD) — anchor at nearest message")
+    mode.add_argument("--before-rowid", type=int, help="Paginate: fetch up to --limit rows older than this rowid")
+    mode.add_argument("--after-rowid", type=int, help="Paginate: fetch up to --limit rows newer than this rowid")
+    p_br.add_argument("--before", type=int, default=25, help="Window size before anchor (date mode)")
+    p_br.add_argument("--after", type=int, default=25, help="Window size after anchor (date mode)")
+    p_br.add_argument("--limit", type=int, default=50, help="Batch size (pagination modes)")
+
     args = ap.parse_args()
     conn = load_db(args.db)
     try:
@@ -1455,6 +1465,24 @@ def main() -> int:
                     marker = " ← TARGET" if m["is_target"] else ""
                     text = (m["text"] or "(no text)")[:100]
                     print(f"[{m['datetime']}] {m['sender']:<20} ({m['reaction_count']} rxn) {text}{marker}")
+        elif args.cmd == "browse":
+            data = collect_browse(
+                conn,
+                args.chat_id,
+                date=args.date,
+                before_rowid=args.before_rowid,
+                after_rowid=args.after_rowid,
+                before=args.before,
+                after=args.after,
+                limit=args.limit,
+            )
+            if args.json:
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+            else:
+                for m in data.get("messages", []):
+                    marker = " ← ANCHOR" if m.get("is_target") else ""
+                    text = (m["text"] or "(no text)")[:100]
+                    print(f"[{m['datetime']}] {m['sender']:<20} {text}{marker}")
     finally:
         conn.close()
     return 0
