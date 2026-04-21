@@ -939,6 +939,104 @@ def collect_context(
     }
 
 
+def collect_browse(
+    conn: sqlite3.Connection,
+    chat_id: int,
+    *,
+    date: str | None = None,
+    before_rowid: int | None = None,
+    after_rowid: int | None = None,
+    before: int = 25,
+    after: int = 25,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Browse a chat's messages by date or by pagination edge rowid.
+
+    Exactly one of `date`, `before_rowid`, `after_rowid` must be provided.
+    Always returns {chat_id, chat_name, anchor_rowid, resolved_date, messages}
+    where anchor_rowid/resolved_date are null in pagination modes and
+    messages is always oldest-first. Excludes reaction/sticker rows
+    (associated_message_type != 0) from the feed.
+    """
+    modes_set = sum(x is not None for x in (date, before_rowid, after_rowid))
+    if modes_set != 1:
+        raise ValueError(
+            "collect_browse: exactly one of date, before_rowid, after_rowid required"
+        )
+
+    all_labels = all_handle_labels(conn)
+    base = {
+        "chat_id": chat_id,
+        "chat_name": chat_name(conn, chat_id),
+        "anchor_rowid": None,
+        "resolved_date": None,
+    }
+
+    if date is not None:
+        target_ns = iso_to_apple_ns(date)
+        anchor = conn.execute(
+            """
+            SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+                   m.attributedBody, m.balloon_bundle_id
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = ?
+              AND m.associated_message_type = 0
+            ORDER BY ABS(m.date - ?) ASC, m.ROWID ASC
+            LIMIT 1
+            """,
+            (chat_id, target_ns),
+        ).fetchone()
+        if anchor is None:
+            return {**base, "messages": []}
+
+        before_rows = conn.execute(
+            """
+            SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+                   m.attributedBody, m.balloon_bundle_id
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = ?
+              AND m.associated_message_type = 0
+              AND (m.date < ? OR (m.date = ? AND m.ROWID < ?))
+            ORDER BY m.date DESC, m.ROWID DESC
+            LIMIT ?
+            """,
+            (chat_id, anchor["date"], anchor["date"], anchor["ROWID"], before),
+        ).fetchall()
+        after_rows = conn.execute(
+            """
+            SELECT m.ROWID, m.guid, m.handle_id, m.is_from_me, m.date, m.text,
+                   m.attributedBody, m.balloon_bundle_id
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            WHERE cmj.chat_id = ?
+              AND m.associated_message_type = 0
+              AND (m.date > ? OR (m.date = ? AND m.ROWID > ?))
+            ORDER BY m.date ASC, m.ROWID ASC
+            LIMIT ?
+            """,
+            (chat_id, anchor["date"], anchor["date"], anchor["ROWID"], after),
+        ).fetchall()
+
+        ordered = list(reversed(before_rows)) + [anchor] + list(after_rows)
+        anchor_rowid = anchor["ROWID"]
+        resolved_dt = apple_ns_to_dt(anchor["date"]).astimezone()
+        messages = [
+            _enrich_message(conn, r, all_labels, target_rowid=anchor_rowid)
+            for r in ordered
+        ]
+        return {
+            **base,
+            "anchor_rowid": anchor_rowid,
+            "resolved_date": resolved_dt.strftime("%Y-%m-%d"),
+            "messages": messages,
+        }
+
+    # Pagination modes handled in Task 5 and Task 6.
+    raise NotImplementedError("pagination modes land in subsequent tasks")
+
+
 def collect_stats(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
     all_labels = all_handle_labels(conn)
 
